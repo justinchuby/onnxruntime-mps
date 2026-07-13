@@ -27,6 +27,13 @@ no `.metal` kernels to maintain.
 
 Ops the EP does not translate are left unclaimed and run on ORT's CPU EP.
 
+The translator covers the **full set of ops Mobius emits** (~85 op types) via a modular, opset-aware
+registry (`src/ep/ops/*.cc`) — math/logical, reductions, shape/data-movement, normalizations,
+attention (GQA, Attention 23/24, MHA, RoPE), dense MatMul/Gemm, Conv/pooling, quantized matmul &
+embedding, and more, in fp32/fp16/bf16. A handful of ops that need engine-level control-flow or
+recurrence (`Scan`, `LSTM`, `LinearAttention`, `MoE`, `PackedMultiHeadAttention`) run on ORT CPU by
+design. See [`docs/OP_ARCHITECTURE.md`](docs/OP_ARCHITECTURE.md) for the full coverage table.
+
 ## Requirements
 
 - macOS on Apple Silicon, ORT 1.27 prebuilt (`ORT_API_VERSION >= 27`)
@@ -37,17 +44,66 @@ Ops the EP does not translate are left unclaimed and run on ORT's CPU EP.
 ```sh
 cmake -S . -B build -G "Unix Makefiles"   # FAILS if mlx-c is not installed
 cmake --build build -j8
-# => build/libonnxruntime_mlx_ep.dylib   (registers the EP under the name "MetalEP")
+# => build/libonnxruntime_mlx_ep.dylib   (registers the EP under the name "MLXExecutionProvider")
 ```
+
+## Install & use
+
+### Python (recommended)
+
+```sh
+pip install onnxruntime-mlx        # macOS/Apple-Silicon wheel; bundles the mlx runtime
+```
+
+```python
+import onnxruntime as ort
+import onnxruntime_mlx
+
+# Register the plugin EP once, then select it (with CPU fallback) like any provider.
+onnxruntime_mlx.register_execution_provider_library()          # name: "MLXExecutionProvider"
+sess = ort.InferenceSession(
+    "model.onnx",
+    providers=["MLXExecutionProvider", "CPUExecutionProvider"],
+)
+out = sess.run(None, feeds)
+```
+
+`onnxruntime_mlx` also exposes `library_path()`, `ep_name()`, `version()`, and
+`append_to_session_options(so)`.
+
+### C / C++ (or any onnxruntime binding)
+
+Point onnxruntime at the built dylib and select the provider by name:
+
+```c
+// 1. Register the plugin library with the environment (once).
+RegisterExecutionProviderLibrary(env, "MLXExecutionProvider",
+                                 "/abs/path/libonnxruntime_mlx_ep.dylib");
+// 2. Append it to a session's options (falls back to CPU for unclaimed ops).
+const char* ep = "MLXExecutionProvider";
+SessionOptionsAppendExecutionProvider_V2(options, env, &ep, /*count*/ 1, ...);
+```
+
+From Rust via **onnx-genai**: `ONNX_GENAI_EP=metal` +
+`ONNX_GENAI_METAL_EP_LIB=/abs/path/libonnxruntime_mlx_ep.dylib`.
+
+## Performance (M1 Max, warm)
+
+The EP is a **prefill / TTFT accelerator**: MLX prefill runs **1.85–2.77× faster than the ORT CPU EP**
+(and the lead grows with prompt length). Decode is weight-bandwidth-bound — on small models the CPU
+`accuracy_level=4` int8 path is very fast, so decode stays competitive-to-CPU-favored there; the MLX
+decode edge widens on larger models. Unclaimed ops fall back to ORT CPU, so any graph still runs.
 
 ## Layout
 
 ```
 docs/     design docs (DESIGN, OP_ARCHITECTURE, MLX_EVALUATION)
 include/  public C entry-point headers (CreateEpFactories / ReleaseEpFactory)
-src/ep/   plugin-EP ABI glue + the ONNX->MLX translator (mlx_backend.{h,cc})
+src/ep/   plugin-EP ABI glue + the modular ONNX->MLX translator (ops/*.cc, mlx_backend, op_registry)
+python/   nanobind + scikit-build-core pip package (onnxruntime-mlx)
 cmake/    build helpers
-tests/    MLX op-correctness (tests/ops) + e2e coherence & leak (tests/e2e)
+tests/    MLX op-correctness (tests/ops, pytest) + e2e coherence & leak (tests/e2e)
+.github/  CI (build + op tests) and PyPI trusted-publishing workflows
 ```
 
 ## Testing

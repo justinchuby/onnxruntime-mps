@@ -61,16 +61,31 @@ struct NodeDesc {
   // threaded from ep.cc so the registry can dispatch opset-23 vs opset-24 variants of an op to
   // different handlers. 0 when unknown (matches any registration).
   int since_version = 0;
-  std::unordered_map<std::string, int64_t> ints;
-  std::unordered_map<std::string, float> floats;
+  // Every ONNX attribute on the node, copied generically by ep.cc (no fixed per-op list). Keyed by
+  // attribute name and split by ONNX attribute type so a handler reads e.g. n.ints.at("axis"),
+  // n.int_arrays.at("axes"), n.strings.at("mode"). Absent attributes are simply not in the map, so
+  // handlers use n.<map>.count(name) ? n.<map>.at(name) : <default> (or .at() for required attrs).
+  // GRAPH and TENSOR attributes are not carried today (no claimed op reads them; see docs §2/§6).
+  std::unordered_map<std::string, int64_t> ints;                       // ORT_OP_ATTR_INT
+  std::unordered_map<std::string, float> floats;                       // ORT_OP_ATTR_FLOAT
+  std::unordered_map<std::string, std::vector<int64_t>> int_arrays;    // ORT_OP_ATTR_INTS
+  std::unordered_map<std::string, std::vector<float>> float_arrays;    // ORT_OP_ATTR_FLOATS
+  std::unordered_map<std::string, std::string> strings;               // ORT_OP_ATTR_STRING
   std::vector<TensorRef> inputs;
   std::vector<OutRef> outputs;
 };
 
 // Claim-time membership check: can the MLX backend translate (domain, op_type) at this opset? Backed
 // by the SAME registry the run-time translator uses, so a claimed op is always translatable. Called
-// from ep.cc::GetCapability (in addition to the per-op dtype/shape/attribute claim predicates).
+// from BuildPlan; also underpins Claimable().
 bool Supported(const std::string& domain, const std::string& op_type, int since_version);
+
+// Claim-time node predicate consulted from ep.cc::GetCapability. True iff the registry has a matching
+// (domain, op, opset) entry AND that entry's registered claim predicate accepts this concrete node
+// (its dtypes/shapes/attributes/input form). This is the single hook the EP uses to decide claims —
+// all per-op claim logic lives beside the translate handlers in ops/*.cc, so adding an op requires
+// no ep.cc edits.
+bool Claimable(Ort::ConstNode node);
 
 // Opaque compiled MLX plan (owns the persistent repacked-weight / cos-sin cache MLX arrays).
 struct Plan;

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "mlx_engine.h"
+#include "op_claim.h"
 #include "op_registry.h"
 
 namespace ort_mps_mlx {
@@ -146,12 +147,62 @@ void GatherBlockQuantizedOp(TranslationContext& ctx, const NodeDesc& n) {
   ctx.Bind(n.outputs[0], ctx.Reshape(w, oshape));
 }
 
+// ---- claim predicates (dtype/shape/attr checks; registry already matched domain/op/opset) -------
+
+// MatMulNBits: A[f32], B[uint8 packed int4], scales[f32] (+ optional bias), bits=4, block=32. fp32
+// only (the quant repack path matches the cpu-recipe graph).
+bool MatMulNBitsClaim(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (outputs.empty()) return false;
+  ONNXTensorElementDataType out_type;
+  if (!TensorInfo(outputs[0], out_type) || out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return false;
+  }
+  if (inputs.size() != 3 && inputs.size() != 4) return false;
+  ONNXTensorElementDataType a, b, s;
+  if (!TensorInfo(inputs[0], a) || !TensorInfo(inputs[1], b) || !TensorInfo(inputs[2], s)) {
+    return false;
+  }
+  if (a != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || b != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8 ||
+      s != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return false;
+  }
+  if (inputs.size() == 4) {
+    ONNXTensorElementDataType bias;
+    if (!TensorInfo(inputs[3], bias) || bias != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
+  }
+  return IntAttribute(node, "bits", 4) == 4 && IntAttribute(node, "block_size", 32) == 32;
+}
+
+// GatherBlockQuantized (com.microsoft): SYMMETRIC int4 embedding, 3-input form (zp=8). The
+// asymmetric 4-input zero_points form is left to ORT's CPU EP.
+bool GatherBlockQuantizedClaim(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (outputs.empty()) return false;
+  ONNXTensorElementDataType output_type;
+  if (!TensorInfo(outputs[0], output_type)) return false;
+  if (inputs.size() != 3) return false;
+  ONNXTensorElementDataType data_type, indices_type, scales_type;
+  if (!TensorInfo(inputs[0], data_type) || !TensorInfo(inputs[1], indices_type) ||
+      !TensorInfo(inputs[2], scales_type) || data_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8 ||
+      (indices_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
+       indices_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) ||
+      scales_type != output_type || !IsFloatType(scales_type)) {
+    return false;
+  }
+  return IntAttribute(node, "bits", 4) == 4 && IntAttribute(node, "gather_axis", 0) == 0 &&
+         IntAttribute(node, "quantize_axis", 1) == 1 && IntAttribute(node, "block_size", 128) >= 16;
+}
+
 }  // namespace
 
 void RegisterQuantOps(OpRegistry& registry) {
-  registry.Register({"com.microsoft", "MatMulNBits", kAnyOpset, kAnyOpset, &MatMulNBitsOp});
   registry.Register(
-      {"com.microsoft", "GatherBlockQuantized", kAnyOpset, kAnyOpset, &GatherBlockQuantizedOp});
+      {"com.microsoft", "MatMulNBits", kAnyOpset, kAnyOpset, &MatMulNBitsOp, &MatMulNBitsClaim});
+  registry.Register({"com.microsoft", "GatherBlockQuantized", kAnyOpset, kAnyOpset,
+                     &GatherBlockQuantizedOp, &GatherBlockQuantizedClaim});
 }
 
 }  // namespace ort_mps_mlx

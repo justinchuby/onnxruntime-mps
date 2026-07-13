@@ -27,11 +27,10 @@ struct SubgraphPlan;
 class MetalEp : public OrtEp, public ApiPtrs {
  public:
   struct Config {
-    // Whether to claim each family of MLX-translatable ops. Set collectively to false via
-    // ONNX_GENAI_METAL_EP_CLAIM=none for a pure-CPU-fallback proof.
-    bool claim_add = true;
-    bool claim_coco = true;
-    bool claim_mariette = true;
+    // Whether to claim any MLX-translatable op. Set to false via ONNX_GENAI_METAL_EP_CLAIM=none for
+    // a pure-CPU-fallback proof. Per-op claim decisions live in the registry (ops/*.cc claim
+    // predicates); this is just the global on/off switch.
+    bool claim_enabled = true;
   };
 
   MetalEp(MetalEpFactory& factory, const std::string& name, const Config& config,

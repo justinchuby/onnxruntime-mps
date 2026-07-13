@@ -27,6 +27,13 @@ class TranslationContext;
 // A translation handler: reads NodeDesc, emits MLX ops through the context, binds the node outputs.
 using OpHandler = void (*)(TranslationContext& ctx, const NodeDesc& node);
 
+// A claim-time predicate registered NEXT TO a handler: given the concrete ONNX node, decide whether
+// the MLX backend can translate it exactly (dtypes, shapes, attributes, input/output form). The
+// registry key (domain, op_type, opset) is already matched before this runs, so a predicate only
+// needs the node-specific checks. Lives in the same ops/<family>.cc module as its handler, using the
+// shared helpers in op_claim.h. Replaces the old per-family *Claimable funcs in ep.cc.
+using ClaimPredicate = bool (*)(Ort::ConstNode node);
+
 // Sentinel for an unbounded opset endpoint. A registration with [kAnyOpset, kAnyOpset] matches any
 // opset (used for version-insensitive ops and contrib/com.microsoft ops). A version-split op
 // registers two handlers with adjacent, non-overlapping ranges (e.g. [1,22] and [23, kAnyOpset]).
@@ -40,6 +47,10 @@ struct OpRegistration {
   int min_opset = kAnyOpset;
   int max_opset = kAnyOpset;
   OpHandler handler = nullptr;
+  // Claim-time predicate for this (domain, op, opset). A node is claimed only if its matching entry
+  // has a claimable that accepts it. Adding an op = handler + claimable in one place; ep.cc never
+  // changes. May be nullptr for an op that is registered but not (yet) claimable on its own.
+  ClaimPredicate claimable = nullptr;
 };
 
 // The opset-aware (domain, op) -> handler table. A process-wide singleton, lazily populated with the
@@ -53,6 +64,11 @@ class OpRegistry {
   // Returns the handler whose (domain, op_type) match and whose [min,max] opset range contains
   // `since_version`, or nullptr if the op has no MLX translation.
   OpHandler Find(const std::string& domain, const std::string& op_type, int since_version) const;
+
+  // Returns the full matching entry (handler + claim predicate) for (domain, op_type, since_version),
+  // or nullptr if the op has no MLX translation. Used by the claim-time check (Claimable).
+  const OpRegistration* FindEntry(const std::string& domain, const std::string& op_type,
+                                  int since_version) const;
 
   const std::vector<OpRegistration>& Entries() const { return table_; }
 

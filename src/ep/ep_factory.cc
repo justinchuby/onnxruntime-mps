@@ -153,14 +153,11 @@ OrtStatus* ORT_API_CALL MetalEpFactory::CreateEpImpl(OrtEpFactory* this_ptr,
                                          "MLXExecutionProvider expects to be selected for exactly one device");
   }
 
-  // Partitioning policy. Default: claim all implemented kernels. Set
-  // ONNX_GENAI_METAL_EP_CLAIM=none to fall everything back to CPU (pure-fallback proof).
+  // Partitioning policy. Default: claim all implemented ops. Set ONNX_GENAI_METAL_EP_CLAIM=none to
+  // fall everything back to CPU (pure-fallback proof).
   MetalEp::Config config;
   if (const char* claim = std::getenv("ONNX_GENAI_METAL_EP_CLAIM")) {
-    const bool enabled = std::strcmp(claim, "none") != 0;
-    config.claim_add = enabled;
-    config.claim_coco = enabled;
-    config.claim_mariette = enabled;
+    config.claim_enabled = std::strcmp(claim, "none") != 0;
   }
 
   auto metal_ep = std::make_unique<MetalEp>(*factory, factory->ep_name_, config, factory->metal_.get(),

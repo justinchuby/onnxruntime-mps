@@ -19,7 +19,7 @@ The registered EP name is **`MLXExecutionProvider`** (the name passed to `Regist
 - Target: `onnxruntime_mlx_ep`
 - Dylib: `libonnxruntime_mlx_ep.dylib`
 
-There are no active `.metal` kernels, no Metal shader registry, and no dtype/MSL specialization scaffold. Op translations live in the modular registry described in §2.2 — adding an op is one handler file plus one registration line.
+There are no active `.metal` kernels, no Metal shader registry, and no dtype/MSL specialization scaffold. Op translations live in the modular registry described in §2.2 — adding an op is one handler + one claim predicate + one registration line in a single `ops/<family>.cc` module, with **zero `ep.cc` edits**.
 
 ---
 
@@ -99,21 +99,57 @@ The translator is a **registry**, not an if-chain. Both the claim-time membershi
 
 | File | Role |
 |---|---|
-| `src/ep/op_registry.{h,cc}` | The `OpRegistry` singleton: the `(domain, op_type, [min_opset, max_opset]) → handler` table, `Find()`, and `Supported()`. |
+| `src/ep/op_registry.{h,cc}` | The `OpRegistry` singleton: the `(domain, op_type, [min_opset, max_opset]) → {handler, claimable}` table, `Find()`, `FindEntry()`, `Supported()`, and `Claimable(node)`. |
+| `src/ep/op_claim.h` | Shared claim-time helpers (`TensorInfo`, `IsMlxFloatType`, `IsFloatType`, `IntAttribute`, `FloatAttribute`, `SuffixBroadcast`, `ScalarOrSuffixBroadcast`) used by the per-op claim predicates in the `ops/*.cc` modules. |
 | `src/ep/mlx_engine.h` | `MlxDtypeFromOnnx()` (the dtype mapping), `Plan` (persistent MLX state), and `TranslationContext` (the object handlers use to `Resolve`/`Bind` and emit MLX ops). |
 | `src/ep/mlx_backend.cc` | The engine: `TranslationContext` method definitions, boundary eval + copy-out, and the `BuildPlan`/`RunPlan`/`DestroyPlan` API. **No op-specific logic.** |
-| `src/ep/ops/elementwise.cc` | `Add`, `Mul`, `Sub`, `Sigmoid`, `Softmax`, `Cast` handlers + `RegisterElementwiseOps`. |
-| `src/ep/ops/norm.cc` | `RMSNormalization`, `SkipSimplifiedLayerNormalization` + `RegisterNormOps`. |
-| `src/ep/ops/attention.cc` | `GroupQueryAttention` (in-op RoPE) + `RegisterAttentionOps`. |
-| `src/ep/ops/quant.cc` | `MatMulNBits`, `GatherBlockQuantized` + `RegisterQuantOps`. |
+| `src/ep/ops/elementwise.cc` | `Add`, `Mul`, `Sub`, `Sigmoid`, `Softmax`, `Cast` handlers **+ claim predicates** + `RegisterElementwiseOps`. |
+| `src/ep/ops/norm.cc` | `RMSNormalization`, `SkipSimplifiedLayerNormalization` + claim predicates + `RegisterNormOps`. |
+| `src/ep/ops/attention.cc` | `GroupQueryAttention` (in-op RoPE) + claim predicate + `RegisterAttentionOps`. |
+| `src/ep/ops/quant.cc` | `MatMulNBits`, `GatherBlockQuantized` + claim predicates + `RegisterQuantOps`. |
 
 Each module exposes one `RegisterXxxOps(OpRegistry&)` function; `op_registry.cc::RegisterBuiltinOps` calls them all once when the singleton is first used (explicit registration — no reliance on static-init ordering).
 
-### The registry key: `(domain, op_type, opset range)`
+### The registry key: `(domain, op_type, opset range)` + claim predicate
 
-A handler is `void(TranslationContext&, const NodeDesc&)`. It is registered under a domain (`""` = `ai.onnx`, or `com.microsoft`), an op type, and an inclusive opset range `[min_opset, max_opset]`. `kAnyOpset` (`-1`) means "unbounded on that side"; a version-insensitive or contrib op registers with `{kAnyOpset, kAnyOpset}`.
+A handler is `void(TranslationContext&, const NodeDesc&)`. It is registered under a domain (`""` = `ai.onnx`, or `com.microsoft`), an op type, an inclusive opset range `[min_opset, max_opset]`, the handler, **and a claim predicate** `bool(Ort::ConstNode)`. `kAnyOpset` (`-1`) means "unbounded on that side"; a version-insensitive or contrib op registers with `{kAnyOpset, kAnyOpset}`.
 
-The opset is threaded end-to-end: `ep.cc` reads `Ort::ConstNode::GetSinceVersion()` into `NodeDesc::since_version`, and `OpRegistry::Find` dispatches by matching the range. This is the seam that lets opset-23 and opset-24 variants of an op (e.g. `Attention`, `TensorScatter`) map to different handlers — a version-split op registers two handlers with adjacent, non-overlapping ranges (e.g. `[1, 22]` and `[23, kAnyOpset]`). `RMSNormalization` already uses a bounded range (`[23, kAnyOpset]`) as a live example.
+```cpp
+// One registry entry = translate handler + claim predicate, registered together in the op module.
+registry.Register({domain, "MyOp", min_opset, max_opset, &MyOpTranslate, &MyOpClaim});
+```
+
+The claim predicate answers, for a concrete ONNX node whose `(domain, op, opset)` already matched this entry: **can the MLX backend translate THIS node exactly** — right dtypes, shapes, attributes, input/output form? It lives in the same `ops/<family>.cc` module as its handler, using the shared helpers in `src/ep/op_claim.h` (`TensorInfo`, `IsMlxFloatType`, `IsFloatType`, `IntAttribute`, `FloatAttribute`, `SuffixBroadcast`, `ScalarOrSuffixBroadcast`). This replaces the old per-family `AddClaimable`/`MarietteClaimable`/`CocoClaimable` funcs that used to live in `ep.cc`.
+
+`ep.cc` no longer contains any per-op claim logic. `GetCapability` calls a single hook — `ort_mps_mlx::Claimable(node)` — which looks up the matching registry entry and runs its claim predicate:
+
+```cpp
+bool Claimable(Ort::ConstNode node) {
+  const OpRegistration* e = OpRegistry::Instance().FindEntry(
+      node.GetDomain(), node.GetOperatorType(), node.GetSinceVersion());
+  return e && e->claimable && e->claimable(node);
+}
+```
+
+Because the same `FindEntry` lookup backs both claim and run-time dispatch, "claimed" and "translatable" can never disagree. `MetalEp::Config::claim_enabled` (set false by `ONNX_GENAI_METAL_EP_CLAIM=none`) is the single global kill-switch.
+
+### The registry key: opset dispatch
+
+The opset is threaded end-to-end: `ep.cc` reads `Ort::ConstNode::GetSinceVersion()` into `NodeDesc::since_version`, and `OpRegistry::Find`/`FindEntry` dispatch by matching the range. This is the seam that lets opset-23 and opset-24 variants of an op (e.g. `Attention`, `TensorScatter`) map to different handlers — a version-split op registers two handlers with adjacent, non-overlapping ranges (e.g. `[1, 22]` and `[23, kAnyOpset]`). `RMSNormalization` already uses a bounded range (`[23, kAnyOpset]`) as a live example.
+
+### Generic node attributes (`NodeDesc`)
+
+`ep.cc` copies **every** ONNX attribute on each node into `NodeDesc` generically — there is no fixed per-op attribute list. Attributes are split by ONNX attribute type into typed maps:
+
+| ONNX attr type | `NodeDesc` map | Handler reads |
+|---|---|---|
+| `ORT_OP_ATTR_INT` | `ints` (`map<string,int64_t>`) | `n.ints.at("axis")` |
+| `ORT_OP_ATTR_FLOAT` | `floats` (`map<string,float>`) | `n.floats.at("epsilon")` |
+| `ORT_OP_ATTR_INTS` | `int_arrays` (`map<string,vector<int64_t>>`) | `n.int_arrays.at("axes")` — Slice/Reduce/Transpose/Conv/Split |
+| `ORT_OP_ATTR_FLOATS` | `float_arrays` (`map<string,vector<float>>`) | `n.float_arrays.at("scales")` |
+| `ORT_OP_ATTR_STRING` | `strings` (`map<string,string>`) | `n.strings.at("mode")` |
+
+Absent attributes are simply not present in the map, so a handler reads an optional attr as `n.<map>.count(name) ? n.<map>.at(name) : <default>` and a required attr as `n.<map>.at(name)`. `STRINGS`, `GRAPH`, and `TENSOR` attributes are not carried today (no claimed op reads them); adding them is a localized `ep.cc` + `NodeDesc` change if a future op needs them. This schema is what unblocks the long tail (Slice, Reduce\*, Transpose, Conv, Attention, Split, LayerNorm) whose attributes are int/float **arrays** and **strings**, which the old fixed scalar list could not represent.
 
 ### The dtype mapping
 
@@ -198,7 +234,7 @@ That means every claim must validate:
 5. Layout assumptions, especially KV-cache shape for GQA.
 6. Whether constants/initializers can be cached in the current plan.
 
-The claim predicate is additionally AND-gated by registry membership: `NodeClaimable` calls `ort_mps_mlx::Supported(domain, op_type, since_version)`, which consults the same `(domain, op, opset)` registry the run-time translator dispatches through. A node the registry has no handler for is never claimed, so "claimed" can never outrun "translatable".
+The claim predicate is registered **next to its translate handler** in the op module (`ops/<family>.cc`) as `OpRegistration::claimable`, and is additionally AND-gated by registry membership: `ort_mps_mlx::Claimable(node)` (called from `ep.cc::GetCapability`) looks up the matching `(domain, op, opset)` entry and runs its claim predicate. A node with no matching entry — or whose entry's predicate rejects it — is never claimed, so "claimed" can never outrun "translatable". **`ep.cc` contains no per-op claim logic.**
 
 When in doubt, do not claim. CPU fallback is preferred to an approximate translation.
 
@@ -206,15 +242,19 @@ When in doubt, do not claim. CPU fallback is preferred to an approximate transla
 
 ## 6. Adding or changing a translated op
 
-The extension path is registry-centric. To add a long-tail op:
+The extension path is **purely additive** and **registry-centric**: adding an op is one self-contained handler module plus one registration line — **no `ep.cc` edits, ever.** To add a long-tail op:
 
-1. **Handler.** Add a `void MyOp(TranslationContext& ctx, const NodeDesc& n)` function in the appropriate `src/ep/ops/<family>.cc` module (or a new module — add its `.cc` to `CMakeLists.txt` and declare `RegisterMyFamilyOps` in `op_registry.h`, called from `RegisterBuiltinOps`). Resolve inputs with `ctx.Resolve(n.inputs[i])`, emit MLX ops via the `ctx` helpers (`Reshape`, `Transpose`, `Astype`, `Mul`, `AddA`, …) or `mlx_*` calls wrapped in `ctx.Keep(...)`, and bind results with `ctx.Bind(n.outputs[i], ...)`. Read the tensor's actual dtype through `MlxDtypeFromOnnx` — never hard-code fp32.
-2. **Register.** Add one line to that module's `RegisterXxxOps`: `registry.Register({domain, "MyOp", min_opset, max_opset, &MyOp});`. Use `kAnyOpset` for a version-insensitive op, or a bounded range for an opset-split op.
-3. **Attributes.** If the handler reads attributes not already threaded, add them to the `mnd.ints`/`mnd.floats` population in `ep.cc`'s node-build loop.
-4. **Claim predicate.** Add/extend the dtype/shape/attribute claim logic in `ep.cc` (`MarietteClaimable`/`CocoClaimable`/`AddClaimable`). The registry AND-gate means you must both add the claim predicate AND register the handler.
-5. **Tests.** Add op-correctness coverage in `tests/ops/mlx_op_test.py` (ONNX IR API). For a dtype-generic op, add fp16 (vs ORT CPU) and bf16 (bf16-interior subgraph vs a numpy reference) cases.
+1. **Handler + claim predicate — in one module.** In the appropriate `src/ep/ops/<family>.cc` (or a new module), add:
+   - `void MyOp(TranslationContext& ctx, const NodeDesc& n)` — resolve inputs with `ctx.Resolve(n.inputs[i])`, read attributes generically (`n.ints.at("axis")`, `n.int_arrays.at("axes")`, `n.strings.at("mode")`, …), emit MLX ops via the `ctx` helpers (`Reshape`, `Transpose`, `Astype`, `Mul`, `AddA`, …) or `mlx_*` calls wrapped in `ctx.Keep(...)`, and bind results with `ctx.Bind(n.outputs[i], ...)`. Read the tensor's actual dtype through `MlxDtypeFromOnnx` — never hard-code fp32.
+   - `bool MyOpClaim(Ort::ConstNode node)` — the dtype/shape/attribute claim checks, using the shared helpers in `src/ep/op_claim.h`.
+2. **Register — one line.** Add to that module's `RegisterXxxOps`: `registry.Register({domain, "MyOp", min_opset, max_opset, &MyOp, &MyOpClaim});`. Use `kAnyOpset` for a version-insensitive op, or a bounded range for an opset-split op.
+3. **CMake (new module only).** If you created a new `src/ep/ops/<family>.cc`, add it to `CMakeLists.txt` and declare `RegisterMyFamilyOps` in `op_registry.h`, called from `op_registry.cc::RegisterBuiltinOps`.
+4. **Attributes — nothing to do.** `ep.cc` already copies **all** of a node's attributes into `NodeDesc` generically (int/float/int-array/float-array/string). Your handler and claim predicate just read them. (Only if you need a `STRINGS`/`GRAPH`/`TENSOR` attribute — which no current op does — is a localized `ep.cc`/`NodeDesc` extension required.)
+5. **Tests.** Add op-correctness coverage in `tests/ops/` (ONNX IR API via `_models.py`). For a dtype-generic op, add fp16 (vs ORT CPU) and bf16 (bf16-interior subgraph vs a numpy reference) cases.
 6. **E2E.** Add or update `tests/e2e/` coverage if the op affects decoder coherence or KV-cache behavior.
 7. **Docs.** Update the §2 table and, if relevant, §2.2.
+
+**Summary of touch points for a new op in an existing family:** one handler function + one claim predicate + one `registry.Register(...)` line in `ops/<family>.cc`, plus tests. **Zero changes to `ep.cc`, `mlx_backend.cc`, or the engine.**
 
 **Add a new opset variant:** register a second handler for the new range and narrow the existing registration (e.g. change `[23, kAnyOpset]` to `[23, 23]` and add `[24, kAnyOpset]`).
 

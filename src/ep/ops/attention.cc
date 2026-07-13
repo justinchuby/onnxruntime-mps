@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "mlx_engine.h"
+#include "op_claim.h"
 #include "op_registry.h"
 
 namespace ort_mps_mlx {
@@ -102,11 +103,44 @@ void GroupQueryAttentionOp(TranslationContext& ctx, const NodeDesc& n) {
   if (n.outputs.size() >= 3) ctx.Bind(n.outputs[2], present_v);
 }
 
+// ---- claim predicate (dtype/shape/attr checks; registry already matched domain/op/opset) --------
+
+// GroupQueryAttention (com.microsoft): fp32 Q/K/V + past/present K/V share-buffer, rotary caches.
+// We claim the standard separate-QKV, 9-input decode/prefill layout used by our Qwen graph.
+bool GroupQueryAttentionClaim(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (outputs.empty()) return false;
+  ONNXTensorElementDataType out_type;
+  if (!TensorInfo(outputs[0], out_type) || out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    return false;
+  }
+  if (inputs.size() != 9) return false;  // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
+  // q/k/v/past_k/past_v/cos/sin are fp32; seqlens_k/total_seq are int32.
+  const int fp32_inputs[] = {0, 1, 2, 3, 4, 7, 8};
+  for (int idx : fp32_inputs) {
+    ONNXTensorElementDataType t;
+    if (!TensorInfo(inputs[idx], t) || t != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
+  }
+  ONNXTensorElementDataType st, tt;
+  if (!TensorInfo(inputs[5], st) || st != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
+  if (!TensorInfo(inputs[6], tt) || tt != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
+  const int64_t nh = IntAttribute(node, "num_heads", 0);
+  const int64_t kvh = IntAttribute(node, "kv_num_heads", 0);
+  if (nh <= 0 || kvh <= 0 || nh % kvh != 0) return false;
+  // Unsupported (rare) variants fall back to CPU. ORT materializes schema defaults, so "disabled"
+  // surfaces as smooth_softmax == -1 (not 0); only a genuine enable (== 1) is rejected.
+  if (IntAttribute(node, "smooth_softmax", 0) == 1) return false;
+  if (IntAttribute(node, "qk_output", 0) != 0) return false;       // QK intermediate output unsupported
+  if (FloatAttribute(node, "softcap", 0.0f) != 0.0f) return false;  // attention logit soft-cap unsupported
+  return true;
+}
+
 }  // namespace
 
 void RegisterAttentionOps(OpRegistry& registry) {
-  registry.Register(
-      {"com.microsoft", "GroupQueryAttention", kAnyOpset, kAnyOpset, &GroupQueryAttentionOp});
+  registry.Register({"com.microsoft", "GroupQueryAttention", kAnyOpset, kAnyOpset,
+                     &GroupQueryAttentionOp, &GroupQueryAttentionClaim});
 }
 
 }  // namespace ort_mps_mlx

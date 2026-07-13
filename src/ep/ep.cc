@@ -19,277 +19,14 @@
 
 namespace {
 
-bool TensorInfo(Ort::ConstValueInfo value, ONNXTensorElementDataType& type,
-                std::vector<int64_t>* shape = nullptr) {
-  auto type_info = value.TypeInfo();
-  if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
-    return false;
-  }
-  auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-  type = tensor_info.GetElementType();
-  if (shape != nullptr) {
-    *shape = tensor_info.GetShape();
-  }
-  return true;
-}
-
-bool IsFloatType(ONNXTensorElementDataType type) {
-  return type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
-}
-
-// Float dtypes the dtype-generic MLX paths (elementwise, activation, softmax, normalization, cast)
-// handle: fp32, fp16 AND bf16. MLX carries the resolved dtype through these ops with no per-dtype
-// code, so claiming bf16/fp16 alongside fp32 just widens which nodes the EP takes.
-bool IsMlxFloatType(ONNXTensorElementDataType type) {
-  return type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
-         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
-}
-
-int64_t IntAttribute(Ort::ConstNode node, const char* name, int64_t default_value) {
-  Ort::ConstOpAttr attr;
-  Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK() || static_cast<const OrtOpAttr*>(attr) == nullptr) {
-    return default_value;
-  }
-  // ORT may hand back a phantom attribute (type UNDEFINED) for names absent on the node; only
-  // trust a genuine INT attribute, otherwise fall back to the caller's default.
-  if (attr.GetType() != ORT_OP_ATTR_INT) {
-    return default_value;
-  }
-  int64_t value = default_value;
-  status = attr.GetValue(value);
-  return status.IsOK() ? value : default_value;
-}
-
-float FloatAttribute(Ort::ConstNode node, const char* name, float default_value) {
-  Ort::ConstOpAttr attr;
-  Ort::Status status = node.GetAttributeByName(name, attr);
-  if (!status.IsOK() || static_cast<const OrtOpAttr*>(attr) == nullptr) {
-    return default_value;
-  }
-  if (attr.GetType() != ORT_OP_ATTR_FLOAT) {
-    return default_value;
-  }
-  float value = default_value;
-  status = attr.GetValue(value);
-  return status.IsOK() ? value : default_value;
-}
-
-bool ScalarOrSuffixBroadcast(Ort::ConstValueInfo a, Ort::ConstValueInfo b) {
-  ONNXTensorElementDataType ta, tb;
-  std::vector<int64_t> da, db;
-  if (!TensorInfo(a, ta, &da) || !TensorInfo(b, tb, &db)) {
-    return false;
-  }
-  if (da.empty() || db.empty()) {
-    return true;
-  }
-  bool result = false;
-  ElementwiseOrSuffixBroadcast(a, b, result);
-  return result;
-}
-
-bool CocoClaimable(Ort::ConstNode node) {
-  const std::string op = node.GetOperatorType();
-  const std::string domain = node.GetDomain();
-  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
-  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
-  if (outputs.size() != 1) {
-    return false;
-  }
-
-  ONNXTensorElementDataType output_type;
-  if (!TensorInfo(outputs[0], output_type)) {
-    return false;
-  }
-
-  // Elementwise binary ops MLX translates: fp16/bf16 Add (fp32 Add is AddClaimable), Mul, and Sub
-  // (fp or int64). Div is NOT translated to MLX and is left to ORT's CPU EP.
-  if (domain.empty() && (op == "Add" || op == "Mul" || op == "Sub")) {
-    if (inputs.size() != 2) return false;
-    ONNXTensorElementDataType a, b;
-    if (!TensorInfo(inputs[0], a) || !TensorInfo(inputs[1], b) ||
-        a != b || b != output_type || !ScalarOrSuffixBroadcast(inputs[0], inputs[1])) {
-      return false;
-    }
-    if (op == "Add") {
-      // fp32 Add is claimed by AddClaimable; here we take the fp16/bf16 activation/residual adds.
-      return a == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
-             a == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
-    }
-    if (op == "Sub" && a == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
-      return true;
-    }
-    return IsMlxFloatType(a);
-  }
-
-  // Sigmoid is MLX-translatable. SiLU/Swish/Gelu are NOT (left to CPU).
-  if ((domain.empty() || domain == "com.microsoft") && op == "Sigmoid") {
-    if (inputs.size() != 1) return false;
-    ONNXTensorElementDataType input_type;
-    return TensorInfo(inputs[0], input_type) && input_type == output_type &&
-           IsMlxFloatType(input_type);
-  }
-
-  if (domain.empty() && op == "Cast" && inputs.size() == 1) {
-    ONNXTensorElementDataType input_type;
-    if (!TensorInfo(inputs[0], input_type)) return false;
-    // Float<->float casts among fp32/fp16/bf16 (any distinct pair) plus the int64->int32 index cast.
-    const bool in_float = IsMlxFloatType(input_type);
-    const bool out_float = IsMlxFloatType(output_type);
-    if (in_float && out_float && input_type != output_type) return true;
-    return input_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
-           output_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
-  }
-
-  if (domain == "com.microsoft" && op == "GatherBlockQuantized") {
-    // MLX translation dequantizes with the symmetric int4 zero-point (zp=8); it does not consume a
-    // `zero_points` input. Only claim the symmetric 3-input form (which the cpu-recipe embedding
-    // uses); the asymmetric 4-input form is left to ORT's CPU EP. (Follow-up: MLX zero_points path.)
-    if (inputs.size() != 3) return false;
-    ONNXTensorElementDataType data_type, indices_type, scales_type;
-    if (!TensorInfo(inputs[0], data_type) || !TensorInfo(inputs[1], indices_type) ||
-        !TensorInfo(inputs[2], scales_type) || data_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8 ||
-        (indices_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 &&
-         indices_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) ||
-        scales_type != output_type || !IsFloatType(scales_type)) {
-      return false;
-    }
-    return IntAttribute(node, "bits", 4) == 4 &&
-           IntAttribute(node, "gather_axis", 0) == 0 &&
-           IntAttribute(node, "quantize_axis", 1) == 1 &&
-           IntAttribute(node, "block_size", 128) >= 16;
-  }
-
-  return false;
-}
-
-// True if `node` is a Mariette core-compute op we have a Metal kernel for.
-bool MarietteClaimable(Ort::ConstNode node) {
-  const std::string op = node.GetOperatorType();
-  const std::string domain = node.GetDomain();
-  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
-  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
-  if (outputs.empty()) {
-    return false;
-  }
-  ONNXTensorElementDataType out_type;
-  if (!TensorInfo(outputs[0], out_type)) {
-    return false;
-  }
-  // MatMulNBits and GroupQueryAttention are fp32-only (quant repack + SDPA path match the cpu-recipe
-  // graph); the normalization/softmax ops below are dtype-generic (fp32/fp16/bf16).
-
-  // MatMulNBits: A[f32], B[uint8 packed int4], scales[f32] (+ optional bias), bits=4, block=32.
-  if (domain == "com.microsoft" && op == "MatMulNBits") {
-    if (out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
-    if (inputs.size() != 3 && inputs.size() != 4) return false;
-    ONNXTensorElementDataType a, b, s;
-    if (!TensorInfo(inputs[0], a) || !TensorInfo(inputs[1], b) || !TensorInfo(inputs[2], s)) {
-      return false;
-    }
-    if (a != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || b != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8 ||
-        s != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      return false;
-    }
-    if (inputs.size() == 4) {
-      ONNXTensorElementDataType bias;
-      if (!TensorInfo(inputs[3], bias) || bias != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
-    }
-    return IntAttribute(node, "bits", 4) == 4 && IntAttribute(node, "block_size", 32) == 32;
-  }
-
-  // RMSNormalization (ai.onnx): X, scale, axis == -1. fp32/fp16/bf16 (mlx_fast_rms_norm is generic).
-  if (domain.empty() && op == "RMSNormalization") {
-    if (inputs.size() != 2) return false;
-    ONNXTensorElementDataType x, g;
-    if (!TensorInfo(inputs[0], x) || !TensorInfo(inputs[1], g)) return false;
-    if (!IsMlxFloatType(x) || g != x || out_type != x) {
-      return false;
-    }
-    const int64_t axis = IntAttribute(node, "axis", -1);
-    return axis == -1;
-  }
-
-  // SkipSimplifiedLayerNormalization (com.microsoft): input, skip, gamma. fp32/fp16/bf16.
-  if (domain == "com.microsoft" && op == "SkipSimplifiedLayerNormalization") {
-    if (inputs.size() != 3) return false;  // no optional bias/beta in our graph
-    ONNXTensorElementDataType i0, i1, i2;
-    if (!TensorInfo(inputs[0], i0) || !TensorInfo(inputs[1], i1) || !TensorInfo(inputs[2], i2)) {
-      return false;
-    }
-    return IsMlxFloatType(i0) && i1 == i0 && i2 == i0 && out_type == i0;
-  }
-
-  // Softmax (ai.onnx): single input, softmax over the last axis. fp32/fp16/bf16.
-  if (domain.empty() && op == "Softmax") {
-    if (inputs.size() != 1) return false;
-    ONNXTensorElementDataType x;
-    std::vector<int64_t> shape;
-    if (!TensorInfo(inputs[0], x, &shape) || !IsMlxFloatType(x) || out_type != x) return false;
-    const int64_t rank = static_cast<int64_t>(shape.size());
-    const int64_t axis = IntAttribute(node, "axis", -1);
-    return rank > 0 && (axis == -1 || axis == rank - 1);
-  }
-
-  // GroupQueryAttention (com.microsoft): fp32 Q/K/V + past/present K/V share-buffer, rotary caches.
-  // We claim the standard separate-QKV, 9-input decode/prefill layout used by our Qwen graph.
-  if (domain == "com.microsoft" && op == "GroupQueryAttention") {
-    if (out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
-    if (inputs.size() != 9) return false;  // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
-    // q/k/v/past_k/past_v/cos/sin are fp32; seqlens_k/total_seq are int32.
-    const int fp32_inputs[] = {0, 1, 2, 3, 4, 7, 8};
-    for (int idx : fp32_inputs) {
-      ONNXTensorElementDataType t;
-      if (!TensorInfo(inputs[idx], t) || t != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
-    }
-    ONNXTensorElementDataType st, tt;
-    if (!TensorInfo(inputs[5], st) || st != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
-    if (!TensorInfo(inputs[6], tt) || tt != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
-    const int64_t nh = IntAttribute(node, "num_heads", 0);
-    const int64_t kvh = IntAttribute(node, "kv_num_heads", 0);
-    if (nh <= 0 || kvh <= 0 || nh % kvh != 0) return false;
-    // Unsupported (rare) variants fall back to CPU. ORT materializes schema defaults, so
-    // "disabled" surfaces as smooth_softmax == -1 (not 0); only a genuine enable (== 1) is rejected.
-    if (IntAttribute(node, "smooth_softmax", 0) == 1) return false;
-    if (IntAttribute(node, "qk_output", 0) != 0) return false;      // QK intermediate output unsupported
-    if (FloatAttribute(node, "softcap", 0.0f) != 0.0f) return false;  // attention logit soft-cap unsupported
-    return true;
-  }
-  return false;
-}
-
-// The standard ai.onnx float32 Add (bias add / residual): equal shapes or trailing-suffix
-// broadcast. Float32 Add is translated to MLX; float16 Add is claimed via CocoClaimable.
-bool AddClaimable(Ort::ConstNode node) {
-  if (node.GetOperatorType() != "Add" || !node.GetDomain().empty()) return false;
-  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
-  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
-  if (inputs.size() != 2 || outputs.size() != 1) return false;
-  bool f0 = false, f1 = false, fo = false;
-  IsFloat32Tensor(inputs[0], f0);
-  IsFloat32Tensor(inputs[1], f1);
-  IsFloat32Tensor(outputs[0], fo);
-  if (!f0 || !f1 || !fo) return false;
-  bool ok = false;
-  ElementwiseOrSuffixBroadcast(inputs[0], inputs[1], ok);
-  return ok;
-}
-
-// Unified predicate: is `node` translatable to MLX by any of the op families (respecting config)?
-// The claimed set is exactly the set of ops the MLX registry can translate; there is no fallback.
-// A node must (a) pass a family's dtype/shape/attribute claim predicate AND (b) have a matching
-// handler in the ONNX->MLX registry for its (domain, op_type, opset). Both conditions consult the
-// SAME registry the run-time translator dispatches through, so "claimed" can never outrun
-// "translatable".
+// Claim-time node predicate. The per-op dtype/shape/attribute claim logic now lives beside each
+// translate handler in src/ep/ops/*.cc (registered as an OpRegistration::claimable). ort_mps_mlx::
+// Claimable consults the SAME (domain, op, opset) registry the run-time translator dispatches
+// through, so "claimed" can never outrun "translatable" and adding an op needs ZERO edits here.
+// config.claim_enabled is the single kill-switch (ONNX_GENAI_METAL_EP_CLAIM=none -> claim nothing).
 bool NodeClaimable(Ort::ConstNode node, const MetalEp::Config& config) {
-  const bool family_ok = (config.claim_add && AddClaimable(node)) ||
-                         (config.claim_mariette && MarietteClaimable(node)) ||
-                         (config.claim_coco && CocoClaimable(node));
-  if (!family_ok) return false;
-  return ort_mps_mlx::Supported(node.GetDomain(), node.GetOperatorType(), node.GetSinceVersion());
+  if (!config.claim_enabled) return false;
+  return ort_mps_mlx::Claimable(node);
 }
 
 }  // namespace
@@ -736,17 +473,43 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
         // Opset version the op was introduced at — threaded so the MLX registry can dispatch
         // opset-specific handler variants (e.g. Attention opset23 vs opset24) by version range.
         mnd.since_version = node.GetSinceVersion();
-        // Attributes the MLX translator reads (harmless defaults otherwise).
-        mnd.ints["K"] = IntAttribute(node, "K", 0);
-        mnd.ints["N"] = IntAttribute(node, "N", 0);
-        mnd.ints["bits"] = IntAttribute(node, "bits", 4);
-        mnd.ints["block_size"] = IntAttribute(node, "block_size", 32);
-        mnd.ints["num_heads"] = IntAttribute(node, "num_heads", 0);
-        mnd.ints["kv_num_heads"] = IntAttribute(node, "kv_num_heads", 0);
-        mnd.ints["do_rotary"] = IntAttribute(node, "do_rotary", 1);
-        mnd.ints["rotary_interleaved"] = IntAttribute(node, "rotary_interleaved", 0);
-        mnd.floats["scale"] = FloatAttribute(node, "scale", 0.0f);
-        mnd.floats["epsilon"] = FloatAttribute(node, "epsilon", 1e-6f);
+        // Generic attribute copy: every ONNX attribute on the node, split by type into the NodeDesc
+        // maps (ints/floats/int_arrays/float_arrays/strings). Handlers read what they need
+        // (n.ints.at("K"), n.int_arrays.at("axes"), n.strings.at("mode"), …) with a default for
+        // absent optional attrs. No fixed per-op list, so a new op's attributes flow through with no
+        // ep.cc edit. GRAPH/TENSOR/STRINGS attrs are skipped (no claimed op reads them today).
+        for (const Ort::ConstOpAttr& attr : node.GetAttributes()) {
+          std::string name = attr.GetName();
+          switch (attr.GetType()) {
+            case ORT_OP_ATTR_INT: {
+              int64_t v = 0;
+              if (attr.GetValue(v).IsOK()) mnd.ints[name] = v;
+              break;
+            }
+            case ORT_OP_ATTR_FLOAT: {
+              float v = 0.0f;
+              if (attr.GetValue(v).IsOK()) mnd.floats[name] = v;
+              break;
+            }
+            case ORT_OP_ATTR_INTS: {
+              std::vector<int64_t> v;
+              if (attr.GetValueArray(v).IsOK()) mnd.int_arrays[name] = std::move(v);
+              break;
+            }
+            case ORT_OP_ATTR_FLOATS: {
+              std::vector<float> v;
+              if (attr.GetValueArray(v).IsOK()) mnd.float_arrays[name] = std::move(v);
+              break;
+            }
+            case ORT_OP_ATTR_STRING: {
+              std::string v;
+              if (attr.GetValue(v).IsOK()) mnd.strings[name] = std::move(v);
+              break;
+            }
+            default:
+              break;  // ORT_OP_ATTR_STRINGS / GRAPH / TENSOR not carried (unused by claimed ops).
+          }
+        }
 
         for (const auto& in : node.GetInputs()) {
           ort_mps_mlx::TensorRef tr;

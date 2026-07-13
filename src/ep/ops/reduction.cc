@@ -81,7 +81,8 @@ mlx_array ApplyReduction(TranslationContext& ctx, mlx_array x, const std::vector
   return out;
 }
 
-void Reduce(TranslationContext& ctx, const NodeDesc& n, ReductionKind kind, bool square_first) {
+void Reduce(TranslationContext& ctx, const NodeDesc& n, ReductionKind kind, bool square_first,
+            bool sqrt_after = false) {
   mlx_array x = ctx.Resolve(n.inputs[0]);
   mlx_array reduced_input = x;
   if (square_first) {
@@ -93,6 +94,11 @@ void Reduce(TranslationContext& ctx, const NodeDesc& n, ReductionKind kind, bool
   const bool noop = n.ints.count("noop_with_empty_axes") &&
                     n.ints.at("noop_with_empty_axes") != 0;
   if (has_axes && raw_axes.empty() && noop) {
+    if (sqrt_after) {
+      mlx_array rooted = NewResult(ctx);
+      MLX_CHECK(mlx_sqrt(&rooted, reduced_input, ctx.stream()));
+      reduced_input = rooted;
+    }
     ctx.Bind(n.outputs[0], reduced_input);
     return;
   }
@@ -101,8 +107,14 @@ void Reduce(TranslationContext& ctx, const NodeDesc& n, ReductionKind kind, bool
       raw_axes.empty() ? std::vector<int>{}
                        : NormalizeAxes(raw_axes, static_cast<int>(mlx_array_ndim(x)));
   const bool keepdims = !n.ints.count("keepdims") || n.ints.at("keepdims") != 0;
-  ctx.Bind(n.outputs[0],
-           ApplyReduction(ctx, reduced_input, axes, raw_axes.empty(), keepdims, kind));
+  mlx_array result =
+      ApplyReduction(ctx, reduced_input, axes, raw_axes.empty(), keepdims, kind);
+  if (sqrt_after) {
+    mlx_array rooted = NewResult(ctx);
+    MLX_CHECK(mlx_sqrt(&rooted, result, ctx.stream()));
+    result = rooted;
+  }
+  ctx.Bind(n.outputs[0], result);
 }
 
 void ReduceSumOp(TranslationContext& ctx, const NodeDesc& n) {
@@ -123,6 +135,10 @@ void ReduceMinOp(TranslationContext& ctx, const NodeDesc& n) {
 
 void ReduceSumSquareOp(TranslationContext& ctx, const NodeDesc& n) {
   Reduce(ctx, n, ReductionKind::Sum, true);
+}
+
+void ReduceL2Op(TranslationContext& ctx, const NodeDesc& n) {
+  Reduce(ctx, n, ReductionKind::Sum, true, true);
 }
 
 int64_t ReadScalarInteger(TranslationContext& ctx, const TensorRef& ref) {
@@ -318,6 +334,7 @@ void RegisterReductionOps(OpRegistry& registry) {
   registry.Register({"", "ReduceMin", kAnyOpset, kAnyOpset, &ReduceMinOp, &ReduceNumericClaim});
   registry.Register(
       {"", "ReduceSumSquare", kAnyOpset, kAnyOpset, &ReduceSumSquareOp, &ReduceNumericClaim});
+  registry.Register({"", "ReduceL2", kAnyOpset, kAnyOpset, &ReduceL2Op, &ReduceMeanClaim});
   registry.Register({"", "CumSum", 11, kAnyOpset, &CumSumOp, &CumSumClaim});
   registry.Register({"", "TopK", 10, kAnyOpset, &TopKOp, &TopKClaim});
 }

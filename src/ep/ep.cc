@@ -4,10 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <numeric>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ep_factory.h"
@@ -279,8 +283,7 @@ bool CocoClaimable(Ort::ConstNode node) {
   return false;
 }
 
-// True if `node` is a Mariette core-compute op we have a Metal kernel for. Kept separate from
-// CocoClaimable/Add so the registrations merge without restructuring each other.
+// True if `node` is a Mariette core-compute op we have a Metal kernel for.
 bool MarietteClaimable(Ort::ConstNode node) {
   const std::string op = node.GetOperatorType();
   const std::string domain = node.GetDomain();
@@ -349,48 +352,71 @@ bool MarietteClaimable(Ort::ConstNode node) {
   return false;
 }
 
+// The standard ai.onnx float32 Add executed by AddKernel (bias add / residual): equal shapes or
+// trailing-suffix broadcast. Float16 Add is claimed via CocoClaimable but still runs on AddKernel.
+bool AddClaimable(Ort::ConstNode node) {
+  if (node.GetOperatorType() != "Add" || !node.GetDomain().empty()) return false;
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (inputs.size() != 2 || outputs.size() != 1) return false;
+  bool f0 = false, f1 = false, fo = false;
+  IsFloat32Tensor(inputs[0], f0);
+  IsFloat32Tensor(inputs[1], f1);
+  IsFloat32Tensor(outputs[0], fo);
+  if (!f0 || !f1 || !fo) return false;
+  bool ok = false;
+  ElementwiseOrSuffixBroadcast(inputs[0], inputs[1], ok);
+  return ok;
+}
+
+// Unified predicate: is `node` supported by any of the EP's kernel families (respecting config)?
+bool NodeClaimable(Ort::ConstNode node, const MetalEp::Config& config) {
+  if (config.claim_add && AddClaimable(node)) return true;
+  if (config.claim_mariette && MarietteClaimable(node)) return true;
+  if (config.claim_coco && CocoClaimable(node)) return true;
+  return false;
+}
+
+// True if `node` is the standard float32/float16 ai.onnx Add routed to AddKernel.
+bool IsAddNode(Ort::ConstNode node) {
+  return node.GetOperatorType() == "Add" && node.GetDomain().empty();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // AddKernel
 // ---------------------------------------------------------------------------
 
-OrtStatus* AddKernel::Compute(OrtKernelContext* kernel_ctx) {
+OrtStatus* AddKernel::ComputeIO(KernelIO& io) {
   try {
-    Ort::KernelContext ctx(kernel_ctx);
-    RETURN_IF(ctx.GetInputCount() != 2, ort_api_, "MetalEP Add expects 2 inputs");
-    RETURN_IF(ctx.GetOutputCount() != 1, ort_api_, "MetalEP Add expects 1 output");
+    RETURN_IF(io.InputCount() != 2, ort_api_, "MetalEP Add expects 2 inputs");
+    RETURN_IF(io.OutputCount() != 1, ort_api_, "MetalEP Add expects 1 output");
 
-    Ort::ConstValue in0 = ctx.GetInput(0);
-    Ort::ConstValue in1 = ctx.GetInput(1);
-    auto ts0 = in0.GetTensorTypeAndShapeInfo();
-    auto ts1 = in1.GetTensorTypeAndShapeInfo();
-
-    const ONNXTensorElementDataType type = ts0.GetElementType();
-    RETURN_IF(type != ts1.GetElementType() ||
+    const IOTensor& in0 = io.Input(0);
+    const IOTensor& in1 = io.Input(1);
+    const ONNXTensorElementDataType type = in0.type;
+    RETURN_IF(type != in1.type ||
                   (type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
                    type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16),
               ort_api_, "MetalEP Add expects matching float32 or float16 inputs");
 
-    std::vector<int64_t> shape0 = ts0.GetShape();
-    std::vector<int64_t> shape1 = ts1.GetShape();
-    const size_t na = ts0.GetElementCount();
-    const size_t nb = ts1.GetElementCount();
-
-    const std::vector<int64_t> out_shape = BinaryOutputShape(shape0, shape1);
+    const size_t na = in0.element_count;
+    const size_t nb = in1.element_count;
+    const std::vector<int64_t> out_shape = BinaryOutputShape(in0.shape, in1.shape);
     const size_t n = std::max(na, nb);
     RETURN_IF(na == 0 || nb == 0, ort_api_, "MetalEP Add received an empty input tensor");
     RETURN_IF((n % na) != 0 || (n % nb) != 0, ort_api_,
               "MetalEP Add operand element counts do not divide the output (unsupported broadcast)");
 
-    Ort::UnownedValue out = ctx.GetOutput(0, out_shape);
+    IOTensor& out = io.Output(0, out_shape);
 
     std::string err;
     ort_mps::ScalarType scalar_type =
         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ? ort_mps::ScalarType::Float32
                                                     : ort_mps::ScalarType::Float16;
-    if (!metal_->Binary(ort_mps::BinaryOp::Add, scalar_type, in0.GetTensorRawData(), na,
-                        in1.GetTensorRawData(), nb, out.GetTensorMutableRawData(), n, err)) {
+    if (!metal_->Binary(ort_mps::BinaryOp::Add, scalar_type, in0.data, na, in1.data, nb,
+                        out.mutable_data, n, err)) {
       return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP Add kernel failed: " + err).c_str());
     }
     return nullptr;
@@ -403,7 +429,7 @@ OrtStatus* AddKernel::Compute(OrtKernelContext* kernel_ctx) {
 // ---------------------------------------------------------------------------
 
 CocoKernel::CocoKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort::ConstNode node)
-    : ort_api_(ort_api), metal_(metal), op_type_(node.GetOperatorType()) {
+    : KernelBase(ort_api, metal), op_type_(node.GetOperatorType()) {
   to_type_ = IntAttribute(node, "to", 0);
   axis_ = IntAttribute(node, "axis", 0);
   block_size_ = IntAttribute(node, "block_size", 32);
@@ -418,39 +444,34 @@ CocoKernel::CocoKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort:
   permutation_ = IntsAttribute(node, "perm");
 }
 
-OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
+OrtStatus* CocoKernel::ComputeIO(KernelIO& io) {
   try {
-    Ort::KernelContext ctx(kernel_ctx);
-    const size_t input_count = ctx.GetInputCount();
-    RETURN_IF(ctx.GetOutputCount() != 1, ort_api_, "MetalEP Coco kernel expects 1 output");
+    const size_t input_count = io.InputCount();
+    RETURN_IF(io.OutputCount() < 1, ort_api_, "MetalEP Coco kernel expects 1 output");
     std::string error;
 
     if (op_type_ == "Mul" || op_type_ == "Sub" || op_type_ == "Div") {
       RETURN_IF(input_count != 2, ort_api_, "MetalEP binary kernel expects 2 inputs");
-      Ort::ConstValue left = ctx.GetInput(0);
-      Ort::ConstValue right = ctx.GetInput(1);
-      auto left_info = left.GetTensorTypeAndShapeInfo();
-      auto right_info = right.GetTensorTypeAndShapeInfo();
-      RETURN_IF(left_info.GetElementType() != right_info.GetElementType(), ort_api_,
+      const IOTensor& left = io.Input(0);
+      const IOTensor& right = io.Input(1);
+      RETURN_IF(left.type != right.type, ort_api_,
                 "MetalEP binary inputs must have the same type");
-      const size_t left_count = left_info.GetElementCount();
-      const size_t right_count = right_info.GetElementCount();
+      const size_t left_count = left.element_count;
+      const size_t right_count = right.element_count;
       const size_t output_count = std::max(left_count, right_count);
       RETURN_IF(left_count == 0 || right_count == 0 ||
                     output_count % left_count != 0 || output_count % right_count != 0,
                 ort_api_, "MetalEP binary broadcast is unsupported");
-      std::vector<int64_t> output_shape =
-          BinaryOutputShape(left_info.GetShape(), right_info.GetShape());
-      Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+      std::vector<int64_t> output_shape = BinaryOutputShape(left.shape, right.shape);
+      IOTensor& output = io.Output(0, output_shape);
       ort_mps::ScalarType type;
-      RETURN_IF(!ToScalarType(left_info.GetElementType(), type), ort_api_,
+      RETURN_IF(!ToScalarType(left.type, type), ort_api_,
                 "MetalEP binary input type is unsupported");
       ort_mps::BinaryOp op = op_type_ == "Mul" ? ort_mps::BinaryOp::Mul
-                              : op_type_ == "Sub" ? ort_mps::BinaryOp::Sub
-                                                  : ort_mps::BinaryOp::Div;
-      if (!metal_->Binary(op, type, left.GetTensorRawData(), left_count,
-                          right.GetTensorRawData(), right_count,
-                          output.GetTensorMutableRawData(), output_count, error)) {
+                             : op_type_ == "Sub" ? ort_mps::BinaryOp::Sub
+                                                 : ort_mps::BinaryOp::Div;
+      if (!metal_->Binary(op, type, left.data, left_count, right.data, right_count,
+                          output.mutable_data, output_count, error)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL,
                                      ("MetalEP " + op_type_ + " failed: " + error).c_str());
       }
@@ -460,20 +481,18 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
     if (op_type_ == "Sigmoid" || op_type_ == "SiLU" || op_type_ == "Swish" ||
         op_type_ == "Gelu") {
       RETURN_IF(input_count != 1, ort_api_, "MetalEP unary kernel expects 1 input");
-      Ort::ConstValue input = ctx.GetInput(0);
-      auto info = input.GetTensorTypeAndShapeInfo();
+      const IOTensor& input = io.Input(0);
       ort_mps::ScalarType type;
-      RETURN_IF(!ToScalarType(info.GetElementType(), type), ort_api_,
+      RETURN_IF(!ToScalarType(input.type, type), ort_api_,
                 "MetalEP unary input type is unsupported");
-      Ort::UnownedValue output = ctx.GetOutput(0, info.GetShape());
+      IOTensor& output = io.Output(0, input.shape);
       ort_mps::UnaryOp op = ort_mps::UnaryOp::Sigmoid;
       if (op_type_ == "SiLU" || op_type_ == "Swish") {
         op = ort_mps::UnaryOp::SiLU;
       } else if (op_type_ == "Gelu") {
         op = gelu_tanh_ ? ort_mps::UnaryOp::GeluTanh : ort_mps::UnaryOp::Gelu;
       }
-      if (!metal_->Unary(op, type, input.GetTensorRawData(),
-                         output.GetTensorMutableRawData(), info.GetElementCount(), error)) {
+      if (!metal_->Unary(op, type, input.data, output.mutable_data, input.element_count, error)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL,
                                      ("MetalEP " + op_type_ + " failed: " + error).c_str());
       }
@@ -482,15 +501,14 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
 
     if (op_type_ == "Cast") {
       RETURN_IF(input_count != 1, ort_api_, "MetalEP Cast expects 1 input");
-      Ort::ConstValue input = ctx.GetInput(0);
-      auto info = input.GetTensorTypeAndShapeInfo();
+      const IOTensor& input = io.Input(0);
       ort_mps::ScalarType input_type, output_type;
-      RETURN_IF(!ToScalarType(info.GetElementType(), input_type) ||
+      RETURN_IF(!ToScalarType(input.type, input_type) ||
                     !ToScalarType(static_cast<ONNXTensorElementDataType>(to_type_), output_type),
                 ort_api_, "MetalEP Cast type pair is unsupported");
-      Ort::UnownedValue output = ctx.GetOutput(0, info.GetShape());
-      if (!metal_->Cast(input_type, output_type, input.GetTensorRawData(),
-                        output.GetTensorMutableRawData(), info.GetElementCount(), error)) {
+      IOTensor& output = io.Output(0, input.shape);
+      if (!metal_->Cast(input_type, output_type, input.data, output.mutable_data,
+                        input.element_count, error)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP Cast failed: " + error).c_str());
       }
       return nullptr;
@@ -499,17 +517,14 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
     if (op_type_ == "RotaryEmbedding") {
       RETURN_IF(input_count != 3 && input_count != 4, ort_api_,
                 "MetalEP RotaryEmbedding expects 3 or 4 inputs");
-      Ort::ConstValue input = ctx.GetInput(0);
-      Ort::ConstValue cos_cache = ctx.GetInput(1);
-      Ort::ConstValue sin_cache = ctx.GetInput(2);
-      auto input_info = input.GetTensorTypeAndShapeInfo();
-      std::vector<int64_t> shape = input_info.GetShape();
+      const IOTensor& input = io.Input(0);
+      const IOTensor& cos_cache = io.Input(1);
+      const IOTensor& sin_cache = io.Input(2);
+      const std::vector<int64_t>& shape = input.shape;
       RETURN_IF(shape.size() != 3 && shape.size() != 4, ort_api_,
                 "MetalEP RotaryEmbedding expects rank-3 or rank-4 input");
-      auto cos_info = cos_cache.GetTensorTypeAndShapeInfo();
-      auto sin_info = sin_cache.GetTensorTypeAndShapeInfo();
-      std::vector<int64_t> cos_shape = cos_info.GetShape();
-      RETURN_IF(cos_shape.size() != 2 || sin_info.GetShape() != cos_shape, ort_api_,
+      const std::vector<int64_t>& cos_shape = cos_cache.shape;
+      RETURN_IF(cos_shape.size() != 2 || sin_cache.shape != cos_shape, ort_api_,
                 "MetalEP RotaryEmbedding expects matching rank-2 cos/sin caches");
 
       ort_mps::RotaryEmbeddingParams params;
@@ -534,15 +549,13 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
       params.max_sequence_length = static_cast<uint32_t>(cos_shape[0]);
       params.interleaved = interleaved_;
       const int64_t* position_ids =
-          input_count == 4 ? ctx.GetInput(3).GetTensorData<int64_t>() : nullptr;
+          input_count == 4 ? io.Input(3).Data<int64_t>() : nullptr;
       ort_mps::ScalarType type;
-      RETURN_IF(!ToScalarType(input_info.GetElementType(), type), ort_api_,
+      RETURN_IF(!ToScalarType(input.type, type), ort_api_,
                 "MetalEP RotaryEmbedding type is unsupported");
-      Ort::UnownedValue output = ctx.GetOutput(0, shape);
-      if (!metal_->RotaryEmbedding(type, input.GetTensorRawData(),
-                                   cos_cache.GetTensorRawData(), sin_cache.GetTensorRawData(),
-                                   position_ids, output.GetTensorMutableRawData(),
-                                   input_info.GetElementCount(), params, error)) {
+      IOTensor& output = io.Output(0, shape);
+      if (!metal_->RotaryEmbedding(type, input.data, cos_cache.data, sin_cache.data, position_ids,
+                                   output.mutable_data, input.element_count, params, error)) {
         return ort_api_.CreateStatus(
             ORT_EP_FAIL, ("MetalEP RotaryEmbedding failed: " + error).c_str());
       }
@@ -554,14 +567,11 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
                 "MetalEP GatherBlockQuantized expects 3 or 4 inputs");
       RETURN_IF(bits_ != 4 || gather_axis_ != 0 || quantize_axis_ != 1,
                 ort_api_, "MetalEP GatherBlockQuantized only supports q4 axis0/last-axis");
-      Ort::ConstValue data = ctx.GetInput(0);
-      Ort::ConstValue indices = ctx.GetInput(1);
-      Ort::ConstValue scales = ctx.GetInput(2);
-      auto data_info = data.GetTensorTypeAndShapeInfo();
-      auto index_info = indices.GetTensorTypeAndShapeInfo();
-      auto scale_info = scales.GetTensorTypeAndShapeInfo();
-      std::vector<int64_t> data_shape = data_info.GetShape();
-      std::vector<int64_t> scale_shape = scale_info.GetShape();
+      const IOTensor& data = io.Input(0);
+      const IOTensor& indices = io.Input(1);
+      const IOTensor& scales = io.Input(2);
+      const std::vector<int64_t>& data_shape = data.shape;
+      const std::vector<int64_t>& scale_shape = scales.shape;
       RETURN_IF(data_shape.size() != 2 || scale_shape.size() != 2 ||
                     data_shape[0] != scale_shape[0],
                 ort_api_, "MetalEP GatherBlockQuantized expects rank-2 data/scales");
@@ -571,25 +581,23 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
       RETURN_IF(scale_shape[1] !=
                     (static_cast<int64_t>(row_width) + block_size_ - 1) / block_size_,
                 ort_api_, "MetalEP GatherBlockQuantized scale shape mismatch");
-      std::vector<int64_t> output_shape = index_info.GetShape();
+      std::vector<int64_t> output_shape = indices.shape;
       output_shape.push_back(row_width);
-      Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+      IOTensor& output = io.Output(0, output_shape);
       ort_mps::ScalarType output_type;
-      RETURN_IF(!ToScalarType(scale_info.GetElementType(), output_type), ort_api_,
+      RETURN_IF(!ToScalarType(scales.type, output_type), ort_api_,
                 "MetalEP GatherBlockQuantized scale type is unsupported");
       const uint8_t* zero_points = nullptr;
       size_t zero_points_bytes = 0;
       if (input_count == 4) {
-        Ort::ConstValue zp = ctx.GetInput(3);
-        zero_points = static_cast<const uint8_t*>(zp.GetTensorRawData());
-        zero_points_bytes = zp.GetTensorTypeAndShapeInfo().GetElementCount();
+        const IOTensor& zp = io.Input(3);
+        zero_points = static_cast<const uint8_t*>(zp.data);
+        zero_points_bytes = zp.element_count;
       }
       if (!metal_->GatherBlockQuantized(
-              static_cast<const uint8_t*>(data.GetTensorRawData()),
-              data_info.GetElementCount(), indices.GetTensorRawData(),
-              index_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
-              index_info.GetElementCount(), scales.GetTensorRawData(), output_type,
-              zero_points, zero_points_bytes, output.GetTensorMutableRawData(), rows,
+              static_cast<const uint8_t*>(data.data), data.element_count, indices.data,
+              indices.type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, indices.element_count,
+              scales.data, output_type, zero_points, zero_points_bytes, output.mutable_data, rows,
               row_width, packed_width, static_cast<uint32_t>(block_size_), error)) {
         return ort_api_.CreateStatus(
             ORT_EP_FAIL, ("MetalEP GatherBlockQuantized failed: " + error).c_str());
@@ -599,13 +607,11 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
 
     if (op_type_ == "Reshape") {
       RETURN_IF(input_count != 2, ort_api_, "MetalEP Reshape expects 2 inputs");
-      Ort::ConstValue input = ctx.GetInput(0);
-      Ort::ConstValue requested_shape = ctx.GetInput(1);
-      auto input_info = input.GetTensorTypeAndShapeInfo();
-      auto shape_info = requested_shape.GetTensorTypeAndShapeInfo();
-      const int64_t* requested = requested_shape.GetTensorData<int64_t>();
-      std::vector<int64_t> input_shape = input_info.GetShape();
-      std::vector<int64_t> output_shape(shape_info.GetElementCount());
+      const IOTensor& input = io.Input(0);
+      const IOTensor& requested_shape = io.Input(1);
+      const int64_t* requested = requested_shape.Data<int64_t>();
+      const std::vector<int64_t>& input_shape = input.shape;
+      std::vector<int64_t> output_shape(requested_shape.element_count);
       int64_t infer_axis = -1;
       uint64_t known_product = 1;
       for (size_t i = 0; i < output_shape.size(); ++i) {
@@ -623,7 +629,7 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
         output_shape[i] = dim;
         known_product *= static_cast<uint64_t>(dim);
       }
-      const size_t input_elements = input_info.GetElementCount();
+      const size_t input_elements = input.element_count;
       if (infer_axis >= 0) {
         RETURN_IF(known_product == 0 || input_elements % known_product != 0, ort_api_,
                   "MetalEP Reshape cannot infer output dimension");
@@ -633,10 +639,9 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
         RETURN_IF(known_product != input_elements, ort_api_,
                   "MetalEP Reshape element count mismatch");
       }
-      Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
-      const size_t bytes = input_elements * ElementSize(input_info.GetElementType());
-      if (!metal_->CopyBytes(input.GetTensorRawData(), output.GetTensorMutableRawData(), bytes,
-                             error)) {
+      IOTensor& output = io.Output(0, output_shape);
+      const size_t bytes = input_elements * ElementSize(input.type);
+      if (!metal_->CopyBytes(input.data, output.mutable_data, bytes, error)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP Reshape failed: " + error).c_str());
       }
       return nullptr;
@@ -644,14 +649,12 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
 
     if (op_type_ == "Transpose") {
       RETURN_IF(input_count != 1, ort_api_, "MetalEP Transpose expects 1 input");
-      Ort::ConstValue input = ctx.GetInput(0);
-      auto info = input.GetTensorTypeAndShapeInfo();
-      std::vector<int64_t> input_shape = info.GetShape();
+      const IOTensor& input = io.Input(0);
+      const std::vector<int64_t>& input_shape = input.shape;
       if (input_shape.empty()) {
-        Ort::UnownedValue output = ctx.GetOutput(0, input_shape);
-        const size_t bytes = info.GetElementCount() * ElementSize(info.GetElementType());
-        if (!metal_->CopyBytes(input.GetTensorRawData(), output.GetTensorMutableRawData(), bytes,
-                               error)) {
+        IOTensor& output = io.Output(0, input_shape);
+        const size_t bytes = input.element_count * ElementSize(input.type);
+        if (!metal_->CopyBytes(input.data, output.mutable_data, bytes, error)) {
           return ort_api_.CreateStatus(ORT_EP_FAIL,
                                        ("MetalEP Transpose failed: " + error).c_str());
         }
@@ -685,10 +688,9 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
         output_dims[i] = static_cast<uint32_t>(output_shape[i]);
         perm32[i] = static_cast<uint32_t>(permutation[i]);
       }
-      Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
-      if (!metal_->TransposeBytes(input.GetTensorRawData(), output.GetTensorMutableRawData(),
-                                  info.GetElementCount(),
-                                  static_cast<uint32_t>(ElementSize(info.GetElementType())),
+      IOTensor& output = io.Output(0, output_shape);
+      if (!metal_->TransposeBytes(input.data, output.mutable_data, input.element_count,
+                                  static_cast<uint32_t>(ElementSize(input.type)),
                                   static_cast<uint32_t>(input_shape.size()), output_dims.data(),
                                   input_strides.data(), perm32.data(), error)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL,
@@ -699,18 +701,17 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
 
     if (op_type_ == "Concat") {
       RETURN_IF(input_count == 0, ort_api_, "MetalEP Concat expects inputs");
-      std::vector<Ort::ConstValue> inputs;
+      std::vector<const IOTensor*> inputs;
       inputs.reserve(input_count);
-      for (size_t i = 0; i < input_count; ++i) inputs.push_back(ctx.GetInput(i));
-      auto first_info = inputs[0].GetTensorTypeAndShapeInfo();
-      std::vector<int64_t> output_shape = first_info.GetShape();
+      for (size_t i = 0; i < input_count; ++i) inputs.push_back(&io.Input(i));
+      std::vector<int64_t> output_shape = inputs[0]->shape;
       const int64_t rank = static_cast<int64_t>(output_shape.size());
       int64_t axis = axis_ < 0 ? axis_ + rank : axis_;
       RETURN_IF(axis < 0 || axis >= rank, ort_api_, "MetalEP Concat axis is invalid");
+      const ONNXTensorElementDataType first_type = inputs[0]->type;
       output_shape[static_cast<size_t>(axis)] = 0;
       for (size_t i = 0; i < input_count; ++i) {
-        auto info = inputs[i].GetTensorTypeAndShapeInfo();
-        std::vector<int64_t> shape = info.GetShape();
+        const std::vector<int64_t>& shape = inputs[i]->shape;
         RETURN_IF(shape.size() != static_cast<size_t>(rank), ort_api_,
                   "MetalEP Concat ranks must match");
         for (int64_t d = 0; d < rank; ++d) {
@@ -720,7 +721,7 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
         }
         output_shape[static_cast<size_t>(axis)] += shape[static_cast<size_t>(axis)];
       }
-      Ort::UnownedValue output = ctx.GetOutput(0, output_shape);
+      IOTensor& output = io.Output(0, output_shape);
       uint64_t outer = 1, inner = 1;
       for (int64_t d = 0; d < axis; ++d) outer *= output_shape[static_cast<size_t>(d)];
       for (int64_t d = axis + 1; d < rank; ++d) inner *= output_shape[static_cast<size_t>(d)];
@@ -729,8 +730,7 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
                     output_shape[static_cast<size_t>(axis)] >
                         std::numeric_limits<uint32_t>::max(),
                 ort_api_, "MetalEP Concat dimensions exceed uint32 limits");
-      const uint32_t element_size =
-          static_cast<uint32_t>(ElementSize(first_info.GetElementType()));
+      const uint32_t element_size = static_cast<uint32_t>(ElementSize(first_type));
       uint64_t output_elements = 1;
       for (int64_t dim : output_shape) {
         RETURN_IF(dim < 0, ort_api_, "MetalEP Concat runtime dimension is invalid");
@@ -741,13 +741,12 @@ OrtStatus* CocoKernel::Compute(OrtKernelContext* kernel_ctx) {
       const size_t output_bytes = static_cast<size_t>(output_elements) * element_size;
       uint32_t axis_offset = 0;
       for (size_t i = 0; i < input_count; ++i) {
-        auto info = inputs[i].GetTensorTypeAndShapeInfo();
-        std::vector<int64_t> shape = info.GetShape();
+        const std::vector<int64_t>& shape = inputs[i]->shape;
         const uint32_t input_axis = static_cast<uint32_t>(shape[static_cast<size_t>(axis)]);
-        const size_t input_bytes = info.GetElementCount() * element_size;
+        const size_t input_bytes = inputs[i]->element_count * element_size;
         if (!metal_->ConcatSliceBytes(
-                inputs[i].GetTensorRawData(), input_bytes, output.GetTensorMutableRawData(),
-                output_bytes, element_size, static_cast<uint32_t>(outer), input_axis,
+                inputs[i]->data, input_bytes, output.mutable_data, output_bytes, element_size,
+                static_cast<uint32_t>(outer), input_axis,
                 static_cast<uint32_t>(output_shape[static_cast<size_t>(axis)]),
                 static_cast<uint32_t>(inner), axis_offset, error)) {
           return ort_api_.CreateStatus(ORT_EP_FAIL,
@@ -776,7 +775,7 @@ static void RowsAndLast(const std::vector<int64_t>& shape, size_t& rows, size_t&
 
 MarietteKernel::MarietteKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal,
                                Ort::ConstNode node)
-    : ort_api_(ort_api), metal_(metal), op_type_(node.GetOperatorType()) {
+    : KernelBase(ort_api, metal), op_type_(node.GetOperatorType()) {
   epsilon_ = FloatAttribute(node, "epsilon", 1e-6f);
 }
 
@@ -785,20 +784,19 @@ MarietteKernel::~MarietteKernel() {
   if (scales_dev_ != nullptr) metal_->Free(scales_dev_);
 }
 
-OrtStatus* MarietteKernel::Compute(OrtKernelContext* kernel_ctx) {
+OrtStatus* MarietteKernel::ComputeIO(KernelIO& io) {
   try {
-    Ort::KernelContext ctx(kernel_ctx);
     std::string err;
 
     if (op_type_ == "MatMulNBits") {
-      const size_t input_count = ctx.GetInputCount();
+      const size_t input_count = io.InputCount();
       RETURN_IF(input_count != 3 && input_count != 4, ort_api_,
                 "MetalEP MatMulNBits expects 3 or 4 inputs");
-      Ort::ConstValue a_val = ctx.GetInput(0);
-      Ort::ConstValue b_val = ctx.GetInput(1);
-      Ort::ConstValue s_val = ctx.GetInput(2);
-      std::vector<int64_t> a_shape = a_val.GetTensorTypeAndShapeInfo().GetShape();
-      std::vector<int64_t> b_shape = b_val.GetTensorTypeAndShapeInfo().GetShape();  // [N,nblocks,16]
+      const IOTensor& a_val = io.Input(0);
+      const IOTensor& b_val = io.Input(1);
+      const IOTensor& s_val = io.Input(2);
+      const std::vector<int64_t>& a_shape = a_val.shape;
+      const std::vector<int64_t>& b_shape = b_val.shape;  // [N,nblocks,16]
       RETURN_IF(a_shape.empty() || b_shape.size() != 3, ort_api_,
                 "MetalEP MatMulNBits unexpected input ranks");
       const size_t K = static_cast<size_t>(a_shape.back());
@@ -816,33 +814,31 @@ OrtStatus* MarietteKernel::Compute(OrtKernelContext* kernel_ctx) {
         scales_dev_ = metal_->Alloc(scales_bytes_);
         RETURN_IF(b_dev_ == nullptr || scales_dev_ == nullptr, ort_api_,
                   "MetalEP MatMulNBits failed to allocate weight cache");
-        std::memcpy(b_dev_, b_val.GetTensorRawData(), b_bytes_);
-        std::memcpy(scales_dev_, s_val.GetTensorRawData(), scales_bytes_);
+        std::memcpy(b_dev_, b_val.data, b_bytes_);
+        std::memcpy(scales_dev_, s_val.data, scales_bytes_);
       }
 
-      const float* bias = input_count == 4 ? ctx.GetInput(3).GetTensorData<float>() : nullptr;
+      const float* bias = input_count == 4 ? io.Input(3).Data<float>() : nullptr;
       std::vector<int64_t> out_shape(a_shape);
       out_shape.back() = static_cast<int64_t>(N);
-      Ort::UnownedValue out = ctx.GetOutput(0, out_shape);
-      if (!metal_->MatMulNBitsF32(a_val.GetTensorData<float>(),
-                                  static_cast<const uint8_t*>(b_dev_),
+      IOTensor& out = io.Output(0, out_shape);
+      if (!metal_->MatMulNBitsF32(a_val.Data<float>(), static_cast<const uint8_t*>(b_dev_),
                                   static_cast<const float*>(scales_dev_), bias,
-                                  out.GetTensorMutableData<float>(), M, N, K, nblocks, err)) {
+                                  out.MutableData<float>(), M, N, K, nblocks, err)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP MatMulNBits failed: " + err).c_str());
       }
       return nullptr;
     }
 
     if (op_type_ == "RMSNormalization") {
-      RETURN_IF(ctx.GetInputCount() != 2, ort_api_, "MetalEP RMSNormalization expects 2 inputs");
-      Ort::ConstValue x = ctx.GetInput(0);
-      Ort::ConstValue g = ctx.GetInput(1);
-      std::vector<int64_t> shape = x.GetTensorTypeAndShapeInfo().GetShape();
+      RETURN_IF(io.InputCount() != 2, ort_api_, "MetalEP RMSNormalization expects 2 inputs");
+      const IOTensor& x = io.Input(0);
+      const IOTensor& g = io.Input(1);
       size_t rows = 0, d = 0;
-      RowsAndLast(shape, rows, d);
-      Ort::UnownedValue out = ctx.GetOutput(0, shape);
-      if (!metal_->RmsNormF32(x.GetTensorData<float>(), g.GetTensorData<float>(),
-                              out.GetTensorMutableData<float>(), rows, d, epsilon_, err)) {
+      RowsAndLast(x.shape, rows, d);
+      IOTensor& out = io.Output(0, x.shape);
+      if (!metal_->RmsNormF32(x.Data<float>(), g.Data<float>(), out.MutableData<float>(), rows, d,
+                              epsilon_, err)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL,
                                      ("MetalEP RMSNormalization failed: " + err).c_str());
       }
@@ -850,26 +846,24 @@ OrtStatus* MarietteKernel::Compute(OrtKernelContext* kernel_ctx) {
     }
 
     if (op_type_ == "SkipSimplifiedLayerNormalization") {
-      RETURN_IF(ctx.GetInputCount() != 3, ort_api_,
+      RETURN_IF(io.InputCount() != 3, ort_api_,
                 "MetalEP SkipSimplifiedLayerNormalization expects 3 inputs");
-      Ort::ConstValue input = ctx.GetInput(0);
-      Ort::ConstValue skip = ctx.GetInput(1);
-      Ort::ConstValue gamma = ctx.GetInput(2);
-      std::vector<int64_t> shape = input.GetTensorTypeAndShapeInfo().GetShape();
+      const IOTensor& input = io.Input(0);
+      const IOTensor& skip = io.Input(1);
+      const IOTensor& gamma = io.Input(2);
       size_t rows = 0, d = 0;
-      RowsAndLast(shape, rows, d);
-      Ort::UnownedValue out0 = ctx.GetOutput(0, shape);
+      RowsAndLast(input.shape, rows, d);
+      IOTensor& out0 = io.Output(0, input.shape);
       // out[0] is the normalized result; the residual (input+skip) is the last boundary output
       // (ORT drops the unused mean / inv_std_var outputs when fusing the single node).
       float* residual = nullptr;
-      const size_t oc = ctx.GetOutputCount();
+      const size_t oc = io.OutputCount();
       if (oc >= 2) {
-        residual = ctx.GetOutput(oc - 1, shape).GetTensorMutableData<float>();
+        residual = io.Output(oc - 1, input.shape).MutableData<float>();
       }
-      if (!metal_->SkipSimplifiedLayerNormF32(
-              input.GetTensorData<float>(), skip.GetTensorData<float>(),
-              gamma.GetTensorData<float>(), out0.GetTensorMutableData<float>(), residual, rows, d,
-              epsilon_, err)) {
+      if (!metal_->SkipSimplifiedLayerNormF32(input.Data<float>(), skip.Data<float>(),
+                                              gamma.Data<float>(), out0.MutableData<float>(),
+                                              residual, rows, d, epsilon_, err)) {
         return ort_api_.CreateStatus(
             ORT_EP_FAIL, ("MetalEP SkipSimplifiedLayerNormalization failed: " + err).c_str());
       }
@@ -877,14 +871,12 @@ OrtStatus* MarietteKernel::Compute(OrtKernelContext* kernel_ctx) {
     }
 
     if (op_type_ == "Softmax") {
-      RETURN_IF(ctx.GetInputCount() != 1, ort_api_, "MetalEP Softmax expects 1 input");
-      Ort::ConstValue x = ctx.GetInput(0);
-      std::vector<int64_t> shape = x.GetTensorTypeAndShapeInfo().GetShape();
+      RETURN_IF(io.InputCount() != 1, ort_api_, "MetalEP Softmax expects 1 input");
+      const IOTensor& x = io.Input(0);
       size_t rows = 0, d = 0;
-      RowsAndLast(shape, rows, d);
-      Ort::UnownedValue out = ctx.GetOutput(0, shape);
-      if (!metal_->SoftmaxF32(x.GetTensorData<float>(), out.GetTensorMutableData<float>(), rows, d,
-                              err)) {
+      RowsAndLast(x.shape, rows, d);
+      IOTensor& out = io.Output(0, x.shape);
+      if (!metal_->SoftmaxF32(x.Data<float>(), out.MutableData<float>(), rows, d, err)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP Softmax failed: " + err).c_str());
       }
       return nullptr;
@@ -897,18 +889,370 @@ OrtStatus* MarietteKernel::Compute(OrtKernelContext* kernel_ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// OrtNodeComputeInfo for a compiled Add subgraph
+// Subgraph execution plan + executor
 // ---------------------------------------------------------------------------
 
 namespace {
+
+enum class Source { CtxInput, Initializer, Intermediate, Absent };
+
+struct InputRef {
+  std::string name;
+  Source source = Source::Absent;
+  size_t ctx_index = 0;  // valid when source == CtxInput
+  // Initializer payload (session-owned; valid for the session lifetime).
+  const void* init_data = nullptr;
+  std::vector<int64_t> init_shape;
+  ONNXTensorElementDataType init_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  size_t init_count = 0;
+};
+
+struct OutputRef {
+  std::string name;
+  bool external = false;  // true -> a subgraph output routed to ctx.GetOutput(ctx_index)
+  size_t ctx_index = 0;
+  ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+};
+
+struct NodePlan {
+  std::unique_ptr<KernelBase> kernel;
+  std::vector<InputRef> inputs;
+  std::vector<OutputRef> outputs;
+};
+
+}  // namespace
+
+// The concrete SubgraphPlan (forward-declared in ep.h). Owns the per-node kernels and a pool of
+// device-resident intermediate buffers reused across decode steps.
+struct SubgraphPlan {
+  MetalEp* ep = nullptr;
+  std::vector<NodePlan> nodes;  // topological order
+  std::unordered_map<std::string, void*> intermediate_pool;
+  std::unordered_map<std::string, size_t> intermediate_bytes;
+
+  ~SubgraphPlan() {
+    if (ep == nullptr) return;
+    for (auto& kv : intermediate_pool) {
+      if (kv.second != nullptr) ep->Metal()->Free(kv.second);
+    }
+  }
+
+  // Returns a device buffer of at least `bytes` for the named intermediate edge, reusing the
+  // pooled buffer when its capacity is sufficient (stable shapes across decode steps).
+  void* AcquireIntermediate(const std::string& name, size_t bytes) {
+    auto it = intermediate_bytes.find(name);
+    if (it != intermediate_bytes.end() && it->second >= bytes) {
+      return intermediate_pool[name];
+    }
+    if (it != intermediate_bytes.end() && intermediate_pool[name] != nullptr) {
+      ep->Metal()->Free(intermediate_pool[name]);
+    }
+    void* buffer = ep->Metal()->Alloc(std::max<size_t>(bytes, 1));
+    intermediate_pool[name] = buffer;
+    intermediate_bytes[name] = bytes;
+    return buffer;
+  }
+};
+
+namespace {
+
+// KernelIO backed by a fused subgraph: inputs resolve to ORT ctx inputs, session initializers, or
+// device-resident intermediates produced by earlier nodes; outputs are ORT ctx outputs (for
+// subgraph outputs) or freshly-allocated device intermediates.
+class SubgraphIO : public KernelIO {
+ public:
+  SubgraphIO(Ort::KernelContext& ctx, NodePlan& node, SubgraphPlan& plan,
+             std::unordered_map<std::string, IOTensor>& produced)
+      : ctx_(ctx), node_(node), plan_(plan), produced_(produced) {}
+
+  size_t InputCount() const override { return node_.inputs.size(); }
+  size_t OutputCount() const override { return node_.outputs.size(); }
+
+  const IOTensor& Input(size_t index) override {
+    auto cached = input_cache_.find(index);
+    if (cached != input_cache_.end()) return cached->second;
+    const InputRef& ref = node_.inputs[index];
+    IOTensor tensor;
+    switch (ref.source) {
+      case Source::Intermediate: {
+        auto it = produced_.find(ref.name);
+        if (it != produced_.end()) tensor = it->second;
+        break;
+      }
+      case Source::CtxInput: {
+        Ort::ConstValue value = ctx_.GetInput(ref.ctx_index);
+        auto info = value.GetTensorTypeAndShapeInfo();
+        tensor.data = value.GetTensorRawData();
+        tensor.shape = info.GetShape();
+        tensor.type = info.GetElementType();
+        tensor.element_count = info.GetElementCount();
+        break;
+      }
+      case Source::Initializer: {
+        tensor.data = ref.init_data;
+        tensor.shape = ref.init_shape;
+        tensor.type = ref.init_type;
+        tensor.element_count = ref.init_count;
+        break;
+      }
+      case Source::Absent:
+        break;
+    }
+    auto res = input_cache_.emplace(index, std::move(tensor));
+    return res.first->second;
+  }
+
+  IOTensor& Output(size_t index, const std::vector<int64_t>& shape) override {
+    auto cached = output_cache_.find(index);
+    if (cached != output_cache_.end()) return cached->second;
+    OutputRef& ref = node_.outputs[index];
+    IOTensor tensor;
+    tensor.shape = shape;
+    tensor.type = ref.type;
+    size_t count = 1;
+    for (int64_t dim : shape) count *= dim > 0 ? static_cast<size_t>(dim) : 0;
+    tensor.element_count = count;
+    if (ref.external) {
+      Ort::UnownedValue value = ctx_.GetOutput(ref.ctx_index, shape);
+      tensor.mutable_data = value.GetTensorMutableRawData();
+      tensor.data = tensor.mutable_data;
+    } else {
+      const size_t bytes = count * ElementSize(ref.type);
+      void* buffer = plan_.AcquireIntermediate(ref.name, bytes);
+      tensor.mutable_data = buffer;
+      tensor.data = buffer;
+    }
+    if (!ref.name.empty()) {
+      produced_[ref.name] = tensor;  // make it visible to later consumers in the subgraph
+    }
+    auto res = output_cache_.emplace(index, std::move(tensor));
+    return res.first->second;
+  }
+
+ private:
+  Ort::KernelContext& ctx_;
+  NodePlan& node_;
+  SubgraphPlan& plan_;
+  std::unordered_map<std::string, IOTensor>& produced_;
+  std::unordered_map<size_t, IOTensor> input_cache_;
+  std::unordered_map<size_t, IOTensor> output_cache_;
+};
+
+// Runs an entire fused subgraph into a single Metal command buffer: BeginBatch, encode every
+// node's kernel in topological order (device-resident intermediates flow between them with no
+// host round-trip), then EndBatch (one commit + one waitUntilCompleted).
+OrtStatus* RunSubgraph(SubgraphPlan& plan, OrtKernelContext* kernel_context) {
+  MetalEp* ep = plan.ep;
+  const OrtApi& ort_api_ = ep->ort_api;
+  try {
+    Ort::KernelContext ctx(kernel_context);
+    ort_mps::MetalContext* metal = ep->Metal();
+
+    std::string err;
+    if (!metal->BeginBatch(err)) {
+      return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP BeginBatch failed: " + err).c_str());
+    }
+
+    std::unordered_map<std::string, IOTensor> produced;
+    OrtStatus* node_status = nullptr;
+    for (NodePlan& node : plan.nodes) {
+      SubgraphIO io(ctx, node, plan, produced);
+      node_status = node.kernel->ComputeIO(io);
+      if (node_status != nullptr) break;
+    }
+
+    std::string end_err;
+    const bool ended = metal->EndBatch(end_err);
+    if (node_status != nullptr) {
+      return node_status;
+    }
+    if (!ended) {
+      return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP EndBatch failed: " + end_err).c_str());
+    }
+    return nullptr;
+  }
+  MPS_CATCH_RETURN_STATUS
+}
+
+// ---- Convex subgraph clustering (GetCapability) ----
+
+using Bitset = std::vector<uint64_t>;
+
+inline void BitSet(Bitset& b, size_t i) { b[i >> 6] |= (uint64_t{1} << (i & 63)); }
+inline bool BitTest(const Bitset& b, size_t i) { return (b[i >> 6] >> (i & 63)) & 1u; }
+inline void BitOrInto(Bitset& dst, const Bitset& src) {
+  for (size_t i = 0; i < dst.size(); ++i) dst[i] |= src[i];
+}
+inline bool BitIntersects(const Bitset& a, const Bitset& b) {
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i] & b[i]) return true;
+  }
+  return false;
+}
+
+struct UnionFind {
+  std::vector<size_t> parent;
+  explicit UnionFind(size_t n) : parent(n) {
+    for (size_t i = 0; i < n; ++i) parent[i] = i;
+  }
+  size_t Find(size_t x) {
+    while (parent[x] != x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  }
+};
+
+// Groups supported nodes into maximal, convex, connected clusters. A set S is convex (a valid
+// single fused node) iff no node x outside S lies on a path between two members of S; contracting
+// a non-convex set would create a cycle that ORT rejects. Returns one node-index vector per
+// cluster. When `fuse` is false, each supported node becomes its own singleton cluster.
+std::vector<std::vector<size_t>> BuildConvexClusters(const std::vector<Ort::ConstNode>& nodes,
+                                                     const std::vector<char>& supported,
+                                                     bool fuse) {
+  const size_t n = nodes.size();
+  const size_t words = (n + 63) / 64;
+
+  if (!fuse) {
+    std::vector<std::vector<size_t>> clusters;
+    for (size_t i = 0; i < n; ++i) {
+      if (supported[i]) clusters.push_back({i});
+    }
+    return clusters;
+  }
+
+  // Map tensor name -> producing node index.
+  std::unordered_map<std::string, size_t> producer;
+  producer.reserve(n * 2);
+  for (size_t i = 0; i < n; ++i) {
+    for (const auto& out : nodes[i].GetOutputs()) {
+      std::string name = out.GetName();
+      if (!name.empty()) producer.emplace(std::move(name), i);
+    }
+  }
+
+  // Direct successors and predecessors within the graph.
+  std::vector<std::vector<size_t>> succ(n), pred(n);
+  for (size_t j = 0; j < n; ++j) {
+    std::unordered_set<size_t> seen;
+    for (const auto& in : nodes[j].GetInputs()) {
+      std::string name = in.GetName();
+      if (name.empty()) continue;
+      auto it = producer.find(name);
+      if (it == producer.end() || it->second == j) continue;
+      if (seen.insert(it->second).second) {
+        succ[it->second].push_back(j);
+        pred[j].push_back(it->second);
+      }
+    }
+  }
+
+  // Topological order (Kahn) for reachability accumulation.
+  std::vector<size_t> indeg(n, 0);
+  for (size_t j = 0; j < n; ++j) indeg[j] = pred[j].size();
+  std::vector<size_t> order;
+  order.reserve(n);
+  std::vector<size_t> stack;
+  for (size_t i = 0; i < n; ++i) {
+    if (indeg[i] == 0) stack.push_back(i);
+  }
+  while (!stack.empty()) {
+    size_t u = stack.back();
+    stack.pop_back();
+    order.push_back(u);
+    for (size_t v : succ[u]) {
+      if (--indeg[v] == 0) stack.push_back(v);
+    }
+  }
+  if (order.size() != n) {
+    // Cyclic or unexpected; fall back to the node order we were given.
+    order.clear();
+    for (size_t i = 0; i < n; ++i) order.push_back(i);
+  }
+
+  // reach[i] = set of nodes reachable from i (transitive successors, excluding i).
+  std::vector<Bitset> reach(n, Bitset(words, 0));
+  for (size_t idx = order.size(); idx-- > 0;) {
+    const size_t u = order[idx];
+    for (size_t v : succ[u]) {
+      BitSet(reach[u], v);
+      BitOrInto(reach[u], reach[v]);
+    }
+  }
+
+  // Cluster state keyed by union-find root.
+  UnionFind uf(n);
+  std::vector<Bitset> cluster_bits(n, Bitset(words, 0));
+  std::vector<Bitset> reach_bits(n, Bitset(words, 0));
+  for (size_t i = 0; i < n; ++i) {
+    if (!supported[i]) continue;
+    BitSet(cluster_bits[i], i);
+    reach_bits[i] = reach[i];
+  }
+
+  // Candidate merge edges: direct data edges between two supported nodes.
+  std::vector<std::pair<size_t, size_t>> edges;
+  for (size_t u = 0; u < n; ++u) {
+    if (!supported[u]) continue;
+    for (size_t v : succ[u]) {
+      if (supported[v]) edges.emplace_back(u, v);
+    }
+  }
+
+  auto is_convex = [&](const Bitset& s_bits, const Bitset& reach_s) -> bool {
+    for (size_t x = 0; x < n; ++x) {
+      if (BitTest(s_bits, x)) continue;
+      if (!BitTest(reach_s, x)) continue;      // S cannot reach x
+      if (BitIntersects(reach[x], s_bits)) {   // x can reach back into S
+        return false;
+      }
+    }
+    return true;
+  };
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const auto& e : edges) {
+      const size_t ra = uf.Find(e.first);
+      const size_t rb = uf.Find(e.second);
+      if (ra == rb) continue;
+      Bitset merged = cluster_bits[ra];
+      BitOrInto(merged, cluster_bits[rb]);
+      Bitset merged_reach = reach_bits[ra];
+      BitOrInto(merged_reach, reach_bits[rb]);
+      if (!is_convex(merged, merged_reach)) continue;
+      uf.parent[rb] = ra;
+      cluster_bits[ra] = std::move(merged);
+      reach_bits[ra] = std::move(merged_reach);
+      changed = true;
+    }
+  }
+
+  std::unordered_map<size_t, std::vector<size_t>> grouped;
+  for (size_t i = 0; i < n; ++i) {
+    if (!supported[i]) continue;
+    grouped[uf.Find(i)].push_back(i);
+  }
+  std::vector<std::vector<size_t>> clusters;
+  clusters.reserve(grouped.size());
+  for (auto& kv : grouped) {
+    std::sort(kv.second.begin(), kv.second.end());
+    clusters.push_back(std::move(kv.second));
+  }
+  return clusters;
+}
 
 // Base with a virtual dtor so ReleaseNodeComputeInfos can delete polymorphically.
 struct NodeComputeInfoBase : OrtNodeComputeInfo {
   virtual ~NodeComputeInfoBase() = default;
 };
 
-struct AddNodeComputeInfo : NodeComputeInfoBase {
-  explicit AddNodeComputeInfo(MetalEp& ep) : ep_(ep) {
+// One OrtNodeComputeInfo per fused subgraph. CreateState resolves the plan by fused-node name;
+// Compute runs the whole subgraph into a single command buffer.
+struct SubgraphNodeComputeInfo : NodeComputeInfoBase {
+  explicit SubgraphNodeComputeInfo(MetalEp& ep) : ep_(ep) {
     ort_version_supported = ORT_API_VERSION;
     CreateState = CreateStateImpl;
     Compute = ComputeImpl;
@@ -918,13 +1262,13 @@ struct AddNodeComputeInfo : NodeComputeInfoBase {
   static OrtStatus* ORT_API_CALL CreateStateImpl(OrtNodeComputeInfo* this_ptr,
                                                  OrtNodeComputeContext* compute_context,
                                                  void** compute_state) {
-    auto* self = static_cast<AddNodeComputeInfo*>(this_ptr);
+    auto* self = static_cast<SubgraphNodeComputeInfo*>(this_ptr);
     MetalEp& ep = self->ep_;
     std::string fused_name = ep.ep_api.NodeComputeContext_NodeName(compute_context);
-    auto it = ep.AddKernels().find(fused_name);
-    if (it == ep.AddKernels().end()) {
+    auto it = ep.Plans().find(fused_name);
+    if (it == ep.Plans().end()) {
       return ep.ort_api.CreateStatus(ORT_EP_FAIL,
-                                     ("No AddKernel for fused node " + fused_name).c_str());
+                                     ("No subgraph plan for fused node " + fused_name).c_str());
     }
     *compute_state = it->second.get();
     return nullptr;
@@ -932,82 +1276,13 @@ struct AddNodeComputeInfo : NodeComputeInfoBase {
 
   static OrtStatus* ORT_API_CALL ComputeImpl(OrtNodeComputeInfo* /*this_ptr*/, void* compute_state,
                                              OrtKernelContext* kernel_context) {
-    return static_cast<AddKernel*>(compute_state)->Compute(kernel_context);
-  }
-
-  static void ORT_API_CALL ReleaseStateImpl(OrtNodeComputeInfo* /*this_ptr*/, void* /*compute_state*/) {
-    // AddKernel is owned by MetalEp::add_kernels_; nothing to free here.
-  }
-
-  MetalEp& ep_;
-};
-
-struct CocoNodeComputeInfo : NodeComputeInfoBase {
-  explicit CocoNodeComputeInfo(MetalEp& ep) : ep_(ep) {
-    ort_version_supported = ORT_API_VERSION;
-    CreateState = CreateStateImpl;
-    Compute = ComputeImpl;
-    ReleaseState = ReleaseStateImpl;
-  }
-
-  static OrtStatus* ORT_API_CALL CreateStateImpl(OrtNodeComputeInfo* this_ptr,
-                                                 OrtNodeComputeContext* compute_context,
-                                                 void** compute_state) {
-    auto* self = static_cast<CocoNodeComputeInfo*>(this_ptr);
-    MetalEp& ep = self->ep_;
-    std::string fused_name = ep.ep_api.NodeComputeContext_NodeName(compute_context);
-    auto it = ep.CocoKernels().find(fused_name);
-    if (it == ep.CocoKernels().end()) {
-      return ep.ort_api.CreateStatus(ORT_EP_FAIL,
-                                     ("No CocoKernel for fused node " + fused_name).c_str());
-    }
-    *compute_state = it->second.get();
-    return nullptr;
-  }
-
-  static OrtStatus* ORT_API_CALL ComputeImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                             void* compute_state,
-                                             OrtKernelContext* kernel_context) {
-    return static_cast<CocoKernel*>(compute_state)->Compute(kernel_context);
+    return RunSubgraph(*static_cast<SubgraphPlan*>(compute_state), kernel_context);
   }
 
   static void ORT_API_CALL ReleaseStateImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                            void* /*compute_state*/) {}
-
-  MetalEp& ep_;
-};
-
-struct MarietteNodeComputeInfo : NodeComputeInfoBase {
-  explicit MarietteNodeComputeInfo(MetalEp& ep) : ep_(ep) {
-    ort_version_supported = ORT_API_VERSION;
-    CreateState = CreateStateImpl;
-    Compute = ComputeImpl;
-    ReleaseState = ReleaseStateImpl;
+                                            void* /*compute_state*/) {
+    // The plan is owned by MetalEp::plans_; nothing to free here.
   }
-
-  static OrtStatus* ORT_API_CALL CreateStateImpl(OrtNodeComputeInfo* this_ptr,
-                                                 OrtNodeComputeContext* compute_context,
-                                                 void** compute_state) {
-    auto* self = static_cast<MarietteNodeComputeInfo*>(this_ptr);
-    MetalEp& ep = self->ep_;
-    std::string fused_name = ep.ep_api.NodeComputeContext_NodeName(compute_context);
-    auto it = ep.MarietteKernels().find(fused_name);
-    if (it == ep.MarietteKernels().end()) {
-      return ep.ort_api.CreateStatus(ORT_EP_FAIL,
-                                     ("No MarietteKernel for fused node " + fused_name).c_str());
-    }
-    *compute_state = it->second.get();
-    return nullptr;
-  }
-
-  static OrtStatus* ORT_API_CALL ComputeImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                             void* compute_state,
-                                             OrtKernelContext* kernel_context) {
-    return static_cast<MarietteKernel*>(compute_state)->Compute(kernel_context);
-  }
-
-  static void ORT_API_CALL ReleaseStateImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                            void* /*compute_state*/) {}
 
   MetalEp& ep_;
 };
@@ -1051,76 +1326,34 @@ OrtStatus* ORT_API_CALL MetalEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGra
   try {
     Ort::ConstGraph graph{ort_graph};
     std::vector<Ort::ConstNode> nodes = graph.GetNodes();
+    const size_t total = nodes.size();
 
-    size_t total = nodes.size();
+    std::vector<char> supported(total, 0);
+    for (size_t i = 0; i < total; ++i) {
+      supported[i] = NodeClaimable(nodes[i], ep->config_) ? 1 : 0;
+    }
+
+    const bool fuse = std::getenv("ONNX_GENAI_METAL_EP_NOFUSE") == nullptr;
+    std::vector<std::vector<size_t>> clusters = BuildConvexClusters(nodes, supported, fuse);
+
     size_t claimed = 0;
-
-    if (ep->config_.claim_add) {
-      for (const auto& node : nodes) {
-        if (node.GetOperatorType() != "Add" || !node.GetDomain().empty()) {
-          continue;  // only the standard ai.onnx Add
-        }
-        std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
-        std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
-        if (inputs.size() != 2 || outputs.size() != 1) {
-          continue;
-        }
-        bool f0 = false, f1 = false, fo = false;
-        IsFloat32Tensor(inputs[0], f0);
-        IsFloat32Tensor(inputs[1], f1);
-        IsFloat32Tensor(outputs[0], fo);
-        if (!f0 || !f1 || !fo) {
-          continue;
-        }
-        bool claimable = false;
-        ElementwiseOrSuffixBroadcast(inputs[0], inputs[1], claimable);
-        if (!claimable) {
-          continue;  // equal shapes or trailing-suffix (bias) broadcast only; no interior broadcast
-        }
-
-        // Claim this single node as its own fusion unit so ORT compiles it independently.
-        OrtNodeFusionOptions fusion_options = {};
-        fusion_options.ort_version_supported = ORT_API_VERSION;
-        fusion_options.drop_constant_initializers = false;  // ORT supplies inputs at runtime
-        const OrtNode* one[1] = {static_cast<const OrtNode*>(node)};
-        RETURN_IF_ERROR(ep->ep_api.EpGraphSupportInfo_AddNodesToFuse(graph_support_info, one, 1,
-                                                                     &fusion_options));
-        ++claimed;
+    for (const auto& cluster : clusters) {
+      std::vector<const OrtNode*> group;
+      group.reserve(cluster.size());
+      for (size_t idx : cluster) {
+        group.push_back(static_cast<const OrtNode*>(nodes[idx]));
       }
+      OrtNodeFusionOptions fusion_options = {};
+      fusion_options.ort_version_supported = ORT_API_VERSION;
+      fusion_options.drop_constant_initializers = false;  // ORT supplies initializers at runtime
+      RETURN_IF_ERROR(ep->ep_api.EpGraphSupportInfo_AddNodesToFuse(
+          graph_support_info, group.data(), group.size(), &fusion_options));
+      claimed += cluster.size();
     }
 
-    if (ep->config_.claim_coco) {
-      for (const auto& node : nodes) {
-        if (!CocoClaimable(node)) {
-          continue;
-        }
-        OrtNodeFusionOptions fusion_options = {};
-        fusion_options.ort_version_supported = ORT_API_VERSION;
-        fusion_options.drop_constant_initializers = false;
-        const OrtNode* one[1] = {static_cast<const OrtNode*>(node)};
-        RETURN_IF_ERROR(ep->ep_api.EpGraphSupportInfo_AddNodesToFuse(
-            graph_support_info, one, 1, &fusion_options));
-        ++claimed;
-      }
-    }
-
-    if (ep->config_.claim_mariette) {
-      for (const auto& node : nodes) {
-        if (!MarietteClaimable(node)) {
-          continue;
-        }
-        OrtNodeFusionOptions fusion_options = {};
-        fusion_options.ort_version_supported = ORT_API_VERSION;
-        fusion_options.drop_constant_initializers = false;
-        const OrtNode* one[1] = {static_cast<const OrtNode*>(node)};
-        RETURN_IF_ERROR(ep->ep_api.EpGraphSupportInfo_AddNodesToFuse(
-            graph_support_info, one, 1, &fusion_options));
-        ++claimed;
-      }
-    }
-
-    MPS_LOG(INFO, "MetalEP GetCapability: claimed " << claimed << " of " << total
-                                                    << " nodes for Metal; remaining fall back to CPU");
+    MPS_LOG(INFO, "MetalEP GetCapability: claimed "
+                      << claimed << " of " << total << " nodes for Metal across " << clusters.size()
+                      << " fused subgraph(s); remaining fall back to CPU");
     return nullptr;
   }
   MPS_CATCH_RETURN_STATUS
@@ -1135,32 +1368,161 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
   try {
     for (size_t i = 0; i < count; ++i) {
       Ort::ConstGraph graph{graphs[i]};
-      std::vector<Ort::ConstNode> nodes = graph.GetNodes();
-      RETURN_IF(nodes.size() != 1, ep->ort_api, "MetalEP expects one node per fused subgraph");
-
       Ort::ConstNode fused_node{fused_nodes[i]};
-      std::string fused_name = fused_node.GetName();
-      if (nodes[0].GetOperatorType() == "Add") {
-        ep->add_kernels_.emplace(fused_name,
-                                 std::make_unique<AddKernel>(ep->ort_api, ep->metal_));
-        auto info = std::make_unique<AddNodeComputeInfo>(*ep);
-        node_compute_infos[i] = info.release();
-      } else if (MarietteClaimable(nodes[0])) {
-        ep->mariette_kernels_.emplace(
-            fused_name, std::make_unique<MarietteKernel>(ep->ort_api, ep->metal_, nodes[0]));
-        auto info = std::make_unique<MarietteNodeComputeInfo>(*ep);
-        node_compute_infos[i] = info.release();
-      } else if (CocoClaimable(nodes[0])) {
-        ep->coco_kernels_.emplace(
-            fused_name, std::make_unique<CocoKernel>(ep->ort_api, ep->metal_, nodes[0]));
-        auto info = std::make_unique<CocoNodeComputeInfo>(*ep);
-        node_compute_infos[i] = info.release();
-      } else {
-        return ep->ort_api.CreateStatus(
-            ORT_EP_FAIL,
-            ("MetalEP has no compile handler for claimed op " +
-             nodes[0].GetOperatorType()).c_str());
+      const std::string fused_name = fused_node.GetName();
+
+      auto plan = std::make_unique<SubgraphPlan>();
+      plan->ep = ep;
+
+      // Fused-node input/output name -> OrtKernelContext index (the runtime I/O boundary).
+      std::unordered_map<std::string, size_t> ctx_input_index;
+      {
+        std::vector<Ort::ConstValueInfo> ins = fused_node.GetInputs();
+        for (size_t k = 0; k < ins.size(); ++k) {
+          std::string name = ins[k].GetName();
+          if (!name.empty()) ctx_input_index.emplace(std::move(name), k);
+        }
       }
+      std::unordered_map<std::string, size_t> ctx_output_index;
+      {
+        std::vector<Ort::ConstValueInfo> outs = fused_node.GetOutputs();
+        for (size_t k = 0; k < outs.size(); ++k) {
+          std::string name = outs[k].GetName();
+          if (!name.empty()) ctx_output_index.emplace(std::move(name), k);
+        }
+      }
+
+      // Constant initializers referenced by the subgraph (session-owned storage).
+      struct InitData {
+        const void* data = nullptr;
+        std::vector<int64_t> shape;
+        ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+        size_t count = 0;
+      };
+      std::unordered_map<std::string, InitData> initializers;
+      for (const auto& vi : graph.GetInitializers()) {
+        std::string name = vi.GetName();
+        if (name.empty()) continue;
+        Ort::ConstValue value{nullptr};
+        Ort::Status st = vi.GetInitializer(value);
+        if (!st.IsOK() || static_cast<const OrtValue*>(value) == nullptr) continue;
+        auto info = value.GetTensorTypeAndShapeInfo();
+        InitData d;
+        d.data = value.GetTensorRawData();
+        d.shape = info.GetShape();
+        d.type = info.GetElementType();
+        d.count = info.GetElementCount();
+        initializers.emplace(std::move(name), std::move(d));
+      }
+
+      std::vector<Ort::ConstNode> snodes = graph.GetNodes();
+
+      // Producer of each intra-subgraph tensor.
+      std::unordered_map<std::string, size_t> producer;
+      for (size_t k = 0; k < snodes.size(); ++k) {
+        for (const auto& out : snodes[k].GetOutputs()) {
+          std::string name = out.GetName();
+          if (!name.empty()) producer.emplace(std::move(name), k);
+        }
+      }
+
+      // Topological order over the subgraph so producers run before consumers.
+      std::vector<std::vector<size_t>> succ(snodes.size());
+      std::vector<size_t> indeg(snodes.size(), 0);
+      for (size_t j = 0; j < snodes.size(); ++j) {
+        std::unordered_set<size_t> seen;
+        for (const auto& in : snodes[j].GetInputs()) {
+          std::string name = in.GetName();
+          if (name.empty()) continue;
+          auto it = producer.find(name);
+          if (it == producer.end() || it->second == j) continue;
+          if (seen.insert(it->second).second) {
+            succ[it->second].push_back(j);
+            ++indeg[j];
+          }
+        }
+      }
+      std::vector<size_t> order;
+      order.reserve(snodes.size());
+      std::vector<size_t> stack;
+      for (size_t k = 0; k < snodes.size(); ++k) {
+        if (indeg[k] == 0) stack.push_back(k);
+      }
+      while (!stack.empty()) {
+        size_t u = stack.back();
+        stack.pop_back();
+        order.push_back(u);
+        for (size_t v : succ[u]) {
+          if (--indeg[v] == 0) stack.push_back(v);
+        }
+      }
+      if (order.size() != snodes.size()) {
+        order.clear();
+        for (size_t k = 0; k < snodes.size(); ++k) order.push_back(k);
+      }
+
+      // Build the per-node execution plan.
+      for (size_t idx : order) {
+        Ort::ConstNode node = snodes[idx];
+        NodePlan np;
+
+        if (IsAddNode(node)) {
+          np.kernel = std::make_unique<AddKernel>(ep->ort_api, ep->metal_, node);
+        } else if (MarietteClaimable(node)) {
+          np.kernel = std::make_unique<MarietteKernel>(ep->ort_api, ep->metal_, node);
+        } else if (CocoClaimable(node)) {
+          np.kernel = std::make_unique<CocoKernel>(ep->ort_api, ep->metal_, node);
+        } else {
+          return ep->ort_api.CreateStatus(
+              ORT_EP_FAIL,
+              ("MetalEP has no compile handler for claimed op " + node.GetOperatorType()).c_str());
+        }
+
+        for (const auto& in : node.GetInputs()) {
+          InputRef ref;
+          ref.name = in.GetName();
+          if (ref.name.empty()) {
+            ref.source = Source::Absent;
+          } else if (producer.count(ref.name)) {
+            ref.source = Source::Intermediate;
+          } else if (auto ci = ctx_input_index.find(ref.name); ci != ctx_input_index.end()) {
+            ref.source = Source::CtxInput;
+            ref.ctx_index = ci->second;
+          } else if (auto ii = initializers.find(ref.name); ii != initializers.end()) {
+            ref.source = Source::Initializer;
+            ref.init_data = ii->second.data;
+            ref.init_shape = ii->second.shape;
+            ref.init_type = ii->second.type;
+            ref.init_count = ii->second.count;
+          } else {
+            return ep->ort_api.CreateStatus(
+                ORT_EP_FAIL, ("MetalEP could not resolve subgraph input " + ref.name).c_str());
+          }
+          np.inputs.push_back(std::move(ref));
+        }
+
+        for (const auto& out : node.GetOutputs()) {
+          OutputRef ref;
+          ref.name = out.GetName();
+          auto tinfo = out.TypeInfo();
+          if (tinfo.GetONNXType() == ONNX_TYPE_TENSOR) {
+            ref.type = tinfo.GetTensorTypeAndShapeInfo().GetElementType();
+          }
+          if (!ref.name.empty()) {
+            auto co = ctx_output_index.find(ref.name);
+            if (co != ctx_output_index.end()) {
+              ref.external = true;
+              ref.ctx_index = co->second;
+            }
+          }
+          np.outputs.push_back(std::move(ref));
+        }
+
+        plan->nodes.push_back(std::move(np));
+      }
+
+      ep->plans_[fused_name] = std::move(plan);
+      node_compute_infos[i] = new SubgraphNodeComputeInfo(*ep);
     }
     return nullptr;
   }

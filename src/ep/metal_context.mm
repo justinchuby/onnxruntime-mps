@@ -6,6 +6,8 @@
 #include "metal_context.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -161,6 +163,26 @@ struct MetalContext::Impl {
 
   std::mutex alloc_mutex;
   std::unordered_map<void*, id<MTLBuffer>> buffers;
+
+  // Open-batch state (see MetalContext::BeginBatch). When batch_active is true, dispatches
+  // encode into batch_encoder/batch_command and defer submission/copy-back.
+  bool batch_active = false;
+  id<MTLCommandBuffer> batch_command = nil;    // retained while the batch is open (MRR)
+  id<MTLComputeCommandEncoder> batch_encoder = nil;  // retained while the batch is open (MRR)
+  // Temporary buffers created to wrap foreign host pointers during the batch; released in
+  // EndBatch once the GPU has finished reading/writing them.
+  std::vector<id<MTLBuffer>> batch_temps;
+  // Host copy-backs (for wrapped output pointers) deferred until the batch completes.
+  struct DeferredCopy {
+    void* host;
+    id<MTLBuffer> buffer;
+    size_t bytes;
+  };
+  std::vector<DeferredCopy> batch_copybacks;
+
+  // Total GPU submissions (command-buffer commits). One per fused subgraph in batch mode, one per
+  // dispatch otherwise. Used to measure host/GPU round-trips per token.
+  uint64_t commit_count = 0;
 };
 
 MetalContext::MetalContext() : impl_(std::make_unique<Impl>()) {}
@@ -168,6 +190,10 @@ MetalContext::MetalContext() : impl_(std::make_unique<Impl>()) {}
 MetalContext::~MetalContext() {
   if (!impl_) {
     return;
+  }
+  if (std::getenv("ONNX_GENAI_METAL_EP_PROFILE") != nullptr) {
+    fprintf(stderr, "[MetalEP] total GPU command-buffer commits this session: %llu\n",
+            static_cast<unsigned long long>(impl_->commit_count));
   }
   for (auto& entry : impl_->buffers) {
     entry.second = nil;
@@ -287,6 +313,75 @@ static id<MTLBuffer> LookupBuffer(MetalContext::Impl& impl, const void* ptr, siz
   return it == impl.buffers.end() ? nil : it->second;
 }
 
+bool MetalContext::BatchActive() const { return impl_->batch_active; }
+
+uint64_t MetalContext::CommitCount() const { return impl_->commit_count; }
+
+bool MetalContext::BeginBatch(std::string& error) {
+  Impl& impl = *impl_;
+  if (impl.batch_active) {
+    error = "MetalContext::BeginBatch called while a batch is already open";
+    return false;
+  }
+  id<MTLCommandBuffer> command = [impl.queue commandBuffer];
+  if (command == nil) {
+    error = "MetalContext::BeginBatch failed to create a command buffer";
+    return false;
+  }
+  // Default (serial) compute encoder: encoded dispatches execute in order and each observes the
+  // previous dispatch's memory writes, so data-dependent kernels need no explicit barriers.
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  if (encoder == nil) {
+    error = "MetalContext::BeginBatch failed to create a compute encoder";
+    return false;
+  }
+  // command/encoder from -commandBuffer/-computeCommandEncoder are autoreleased (+0); retain them
+  // so they survive across the per-dispatch autorelease pools until EndBatch (MRR, no ARC here).
+  impl.batch_command = [command retain];
+  impl.batch_encoder = [encoder retain];
+  impl.batch_active = true;
+  return true;
+}
+
+bool MetalContext::EndBatch(std::string& error) {
+  Impl& impl = *impl_;
+  if (!impl.batch_active) {
+    error = "MetalContext::EndBatch called with no open batch";
+    return false;
+  }
+  bool ok = true;
+  @autoreleasepool {
+    [impl.batch_encoder endEncoding];
+    [impl.batch_command commit];
+    [impl.batch_command waitUntilCompleted];
+    impl.commit_count++;
+    if (impl.batch_command.status == MTLCommandBufferStatusError) {
+      error = std::string("Batch command buffer failed: ") +
+              (impl.batch_command.error ? [[impl.batch_command.error localizedDescription] UTF8String]
+                                        : "unknown");
+      ok = false;
+    }
+    if (ok) {
+      for (const Impl::DeferredCopy& c : impl.batch_copybacks) {
+        if (c.host != nullptr && c.bytes != 0) {
+          std::memcpy(c.host, [c.buffer contents], c.bytes);
+        }
+      }
+    }
+  }
+  for (id<MTLBuffer> temp : impl.batch_temps) {
+    [temp release];
+  }
+  impl.batch_temps.clear();
+  impl.batch_copybacks.clear();
+  [impl.batch_encoder release];
+  [impl.batch_command release];
+  impl.batch_encoder = nil;
+  impl.batch_command = nil;
+  impl.batch_active = false;
+  return ok;
+}
+
 static bool Dispatch(MetalContext::Impl& impl, const char* pipeline_name,
                      const std::vector<BufferArg>& buffers,
                      const std::vector<BytesArg>& constants, size_t grid_size,
@@ -303,8 +398,12 @@ static bool Dispatch(MetalContext::Impl& impl, const char* pipeline_name,
     id<MTLComputePipelineState> pipeline = pipeline_it->second;
 
     std::vector<id<MTLBuffer>> metal_buffers;
+    std::vector<size_t> offsets(buffers.size(), 0);
     metal_buffers.reserve(buffers.size());
     std::vector<bool> copy_back(buffers.size(), false);
+    // Temporary (+1 owned) buffers we allocate to wrap foreign host pointers; freed after the
+    // command completes (immediately when we own the command buffer, else deferred to EndBatch).
+    std::vector<id<MTLBuffer>> owned_temps;
     for (size_t i = 0; i < buffers.size(); ++i) {
       const BufferArg& arg = buffers[i];
       size_t offset = 0;
@@ -319,25 +418,31 @@ static bool Dispatch(MetalContext::Impl& impl, const char* pipeline_name,
                                           options:MTLResourceStorageModeShared];
         }
         copy_back[i] = arg.access != BufferAccess::Input;
+        if (buffer != nil) {
+          owned_temps.push_back(buffer);  // +1 owned
+        }
       }
       if (buffer == nil) {
+        for (id<MTLBuffer> t : owned_temps) [t release];
         error = std::string("Failed to allocate Metal buffer for ") + pipeline_name;
         return false;
       }
+      offsets[i] = offset;
       metal_buffers.push_back(buffer);
     }
 
-    id<MTLCommandBuffer> command = [impl.queue commandBuffer];
-    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    const bool own_command = !impl.batch_active;
+    id<MTLCommandBuffer> command = own_command ? [impl.queue commandBuffer] : impl.batch_command;
+    id<MTLComputeCommandEncoder> encoder =
+        own_command ? [command computeCommandEncoder] : impl.batch_encoder;
     if (command == nil || encoder == nil) {
+      for (id<MTLBuffer> t : owned_temps) [t release];
       error = std::string("Failed to create Metal command encoder for ") + pipeline_name;
       return false;
     }
     [encoder setComputePipelineState:pipeline];
     for (size_t i = 0; i < metal_buffers.size(); ++i) {
-      size_t offset = 0;
-      LookupBuffer(impl, buffers[i].data, offset);
-      [encoder setBuffer:metal_buffers[i] offset:offset atIndex:i];
+      [encoder setBuffer:metal_buffers[i] offset:offsets[i] atIndex:i];
     }
     for (size_t i = 0; i < constants.size(); ++i) {
       const BytesArg& arg = constants[i];
@@ -349,13 +454,28 @@ static bool Dispatch(MetalContext::Impl& impl, const char* pipeline_name,
     threads_per_group = std::max<NSUInteger>(threads_per_group, 1);
     [encoder dispatchThreads:MTLSizeMake(grid_size, 1, 1)
         threadsPerThreadgroup:MTLSizeMake(threads_per_group, 1, 1)];
+
+    if (!own_command) {
+      // Batch mode: defer submission, copy-backs, and temp-buffer release to EndBatch.
+      for (size_t i = 0; i < buffers.size(); ++i) {
+        if (copy_back[i] && buffers[i].bytes != 0) {
+          impl.batch_copybacks.push_back(
+              {const_cast<void*>(buffers[i].data), metal_buffers[i], buffers[i].bytes});
+        }
+      }
+      for (id<MTLBuffer> t : owned_temps) impl.batch_temps.push_back(t);
+      return true;
+    }
+
     [encoder endEncoding];
     [command commit];
     [command waitUntilCompleted];
+    impl.commit_count++;
 
     if (command.status == MTLCommandBufferStatusError) {
       error = std::string(pipeline_name) + " command buffer failed: " +
               (command.error ? [[command.error localizedDescription] UTF8String] : "unknown");
+      for (id<MTLBuffer> t : owned_temps) [t release];
       return false;
     }
 
@@ -365,6 +485,7 @@ static bool Dispatch(MetalContext::Impl& impl, const char* pipeline_name,
                     buffers[i].bytes);
       }
     }
+    for (id<MTLBuffer> t : owned_temps) [t release];
     return true;
   }
 }
@@ -659,6 +780,7 @@ struct ResolvedBuffer {
   id<MTLBuffer> buffer = nil;
   size_t offset = 0;
   bool copy_back = false;  // temp output buffer whose contents must be memcpy'd to `host` after
+  bool owned = false;      // buffer was newly created here (+1) and must be released after use
   void* host = nullptr;
   size_t bytes = 0;
 };
@@ -683,6 +805,7 @@ static ResolvedBuffer ResolveMC(MetalContext::Impl& impl, const void* ptr, size_
     r.buffer = [impl.device newBufferWithBytes:ptr length:length
                                        options:MTLResourceStorageModeShared];
   }
+  r.owned = r.buffer != nil;  // +1 owned; released after the command completes (or in EndBatch)
   return r;
 }
 
@@ -697,8 +820,10 @@ static bool RunPass(MetalContext::Impl& impl, const char* pipeline_name,
     return false;
   }
   id<MTLComputePipelineState> pipeline = it->second;
-  id<MTLCommandBuffer> command = [impl.queue commandBuffer];
-  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  const bool own_command = !impl.batch_active;
+  id<MTLCommandBuffer> command = own_command ? [impl.queue commandBuffer] : impl.batch_command;
+  id<MTLComputeCommandEncoder> encoder =
+      own_command ? [command computeCommandEncoder] : impl.batch_encoder;
   if (command == nil || encoder == nil) {
     error = std::string("Failed to create Metal command encoder for ") + pipeline_name;
     return false;
@@ -716,20 +841,39 @@ static bool RunPass(MetalContext::Impl& impl, const char* pipeline_name,
   } else {
     [encoder dispatchThreads:grid threadsPerThreadgroup:tg];
   }
+
+  if (!own_command) {
+    // Batch mode: defer submission, copy-backs, and temp-buffer release to EndBatch.
+    for (const ResolvedBuffer& b : buffers) {
+      if (b.copy_back && b.host != nullptr) {
+        impl.batch_copybacks.push_back({b.host, b.buffer, b.bytes});
+      }
+    }
+    for (const ResolvedBuffer& b : buffers) {
+      if (b.owned) impl.batch_temps.push_back(b.buffer);
+    }
+    return true;
+  }
+
   [encoder endEncoding];
   [command commit];
   [command waitUntilCompleted];
-  if (command.status == MTLCommandBufferStatusError) {
+  impl.commit_count++;
+  const bool failed = command.status == MTLCommandBufferStatusError;
+  if (failed) {
     error = std::string(pipeline_name) + " command buffer failed: " +
             (command.error ? [[command.error localizedDescription] UTF8String] : "unknown");
-    return false;
-  }
-  for (const ResolvedBuffer& b : buffers) {
-    if (b.copy_back && b.host != nullptr) {
-      memcpy(b.host, [b.buffer contents], b.bytes);
+  } else {
+    for (const ResolvedBuffer& b : buffers) {
+      if (b.copy_back && b.host != nullptr) {
+        memcpy(b.host, [b.buffer contents], b.bytes);
+      }
     }
   }
-  return true;
+  for (const ResolvedBuffer& b : buffers) {
+    if (b.owned) [b.buffer release];
+  }
+  return !failed;
 }
 
 }  // namespace

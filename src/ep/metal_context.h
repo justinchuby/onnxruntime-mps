@@ -62,6 +62,22 @@ class MetalContext {
   // Human-readable Metal device name (e.g. "Apple M1 Max").
   const std::string& DeviceName() const { return device_name_; }
 
+  // ---- Command-buffer batching ----
+  // While a batch is open, every kernel dispatch below ENCODES into a single shared, serial
+  // MTLComputeCommandEncoder/MTLCommandBuffer instead of creating its own; commit +
+  // waitUntilCompleted + any host copy-backs are deferred to EndBatch. This turns one GPU
+  // submission per node into one per fused subgraph. Intermediate tensors that are device
+  // buffers (from Alloc) flow between encoded dispatches with no host round-trip. Serial
+  // dispatch ordering guarantees each encoded kernel observes the previous kernel's writes.
+  // Nesting is not supported. Not thread-safe with concurrent dispatches on other threads.
+  bool BeginBatch(std::string& error);
+  bool EndBatch(std::string& error);
+  bool BatchActive() const;
+
+  // Total GPU command-buffer submissions (commits) so far. One per fused subgraph while batching,
+  // one per dispatch otherwise; lets callers measure host/GPU round-trips per decode token.
+  uint64_t CommitCount() const;
+
   // ---- Device allocator (shared unified-memory MTLBuffer pool) ----
   // Allocates `bytes` of shared-storage device memory and returns a CPU-addressable
   // pointer (MTLBuffer.contents). Returns nullptr on failure. Thread-safe.

@@ -160,6 +160,7 @@ OrtStatus* ORT_API_CALL MetalEpFactory::CreateEpImpl(OrtEpFactory* this_ptr,
     const bool enabled = std::strcmp(claim, "none") != 0;
     config.claim_add = enabled;
     config.claim_coco = enabled;
+    config.claim_mariette = enabled;
   }
 
   auto metal_ep = std::make_unique<MetalEp>(*factory, factory->ep_name_, config, factory->metal_.get(),

@@ -1,14 +1,17 @@
 // Copyright (c) 2026. Licensed under the MIT License.
 //
-// MetalEp: the per-session OrtEp. The compile-based path claims only implemented/type-safe
-// kernels and leaves everything else unclaimed so ORT assigns it to the CPU EP (graceful
-// fallback). Compile hands ORT one
-// OrtNodeComputeInfo per claimed subgraph whose Compute dispatches a Metal kernel.
+// MetalEp: the per-session OrtEp. GetCapability claims maximal, convex, connected subgraphs of
+// supported ops as ONE fused node each (leaving unsupported ops to ORT's CPU EP). Compile builds
+// a per-subgraph execution plan; the fused node's Compute runs every node of the subgraph into a
+// SINGLE Metal command buffer (one commit / one waitUntilCompleted per subgraph), threading
+// device-resident intermediate MTLBuffers between kernels with no per-node host round-trip.
 //
-// See docs/DESIGN.md 2.4/2.5. Phase 2 switches the hot ops to the kernel-registry path.
+// See docs/DESIGN.md 2.4/2.5. Kernels encode into the shared command buffer via the KernelIO
+// interface, so the same kernel code serves both the fused-subgraph path and direct testing.
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -19,24 +22,64 @@
 
 class MetalEpFactory;
 
-// Executes a single ONNX Add node on the GPU (float32 or float16).
-struct AddKernel {
-  AddKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal) : ort_api_(ort_api), metal_(metal) {}
-  OrtStatus* Compute(OrtKernelContext* kernel_ctx);
+// A single tensor operand handed to a kernel. `data` is a read view (inputs and outputs);
+// `mutable_data` is the write view (outputs). Both point at unified-memory MTLBuffer storage
+// resolved by the EP: subgraph inputs/outputs come from ORT, intermediates from MetalContext.
+struct IOTensor {
+  const void* data = nullptr;
+  void* mutable_data = nullptr;
+  std::vector<int64_t> shape;
+  ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  size_t element_count = 0;
+
+  template <typename T>
+  const T* Data() const {
+    return static_cast<const T*>(data);
+  }
+  template <typename T>
+  T* MutableData() const {
+    return static_cast<T*>(mutable_data);
+  }
+};
+
+// Abstracts a single node's I/O so a kernel is agnostic to whether it runs standalone against an
+// OrtKernelContext or as one node inside a fused subgraph (where inputs/outputs are the EP's
+// device-resident intermediates). Output(index, shape) allocates/binds the output for `shape`
+// exactly like OrtKernelContext::GetOutput, so kernels keep computing their own output shapes.
+class KernelIO {
+ public:
+  virtual ~KernelIO() = default;
+  virtual size_t InputCount() const = 0;
+  virtual size_t OutputCount() const = 0;
+  virtual const IOTensor& Input(size_t index) = 0;
+  virtual IOTensor& Output(size_t index, const std::vector<int64_t>& shape) = 0;
+};
+
+// Common base for every Metal kernel. ComputeIO encodes the op into whatever command buffer the
+// MetalContext currently has open (a shared per-subgraph buffer when a batch is active), so the
+// EP controls submission boundaries.
+struct KernelBase {
+  KernelBase(const OrtApi& ort_api, ort_mps::MetalContext* metal)
+      : ort_api_(ort_api), metal_(metal) {}
+  virtual ~KernelBase() = default;
+  virtual OrtStatus* ComputeIO(KernelIO& io) = 0;
 
   const OrtApi& ort_api_;
   ort_mps::MetalContext* metal_;
 };
 
-// Coco-owned data movement, quantization, and activation kernels. This remains separate from
-// AddKernel so Nabil's proven Phase-1 path and other kernel engineers' registrations can merge
-// without restructuring each other.
-struct CocoKernel {
-  CocoKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort::ConstNode node);
-  OrtStatus* Compute(OrtKernelContext* kernel_ctx);
+// Executes a single ONNX Add node on the GPU (float32 or float16).
+struct AddKernel : KernelBase {
+  AddKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort::ConstNode /*node*/)
+      : KernelBase(ort_api, metal) {}
+  OrtStatus* ComputeIO(KernelIO& io) override;
+};
 
-  const OrtApi& ort_api_;
-  ort_mps::MetalContext* metal_;
+// Coco-owned data movement, quantization, and activation kernels.
+struct CocoKernel : KernelBase {
+  CocoKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort::ConstNode node);
+  OrtStatus* ComputeIO(KernelIO& io) override;
+
   std::string op_type_;
   int64_t to_type_ = 0;
   int64_t axis_ = 0;
@@ -53,18 +96,14 @@ struct CocoKernel {
 };
 
 // Mariette-owned core-compute kernels (MatMulNBits, RMSNormalization,
-// SkipSimplifiedLayerNormalization, Softmax). Kept separate from AddKernel/CocoKernel so the
-// hot-path compute kernels merge without restructuring the other engineers' registrations.
-// Constant int4 weights + scales for MatMulNBits are copied into device buffers once (via
-// MetalContext::Alloc) and reused across decode steps, so the model weights become
-// device-resident after the first token — the key perf lever for the decode GEMV.
-struct MarietteKernel {
+// SkipSimplifiedLayerNormalization, Softmax). Constant int4 weights + scales for MatMulNBits are
+// copied into device buffers once (via MetalContext::Alloc) and reused across decode steps, so
+// the model weights become device-resident after the first token.
+struct MarietteKernel : KernelBase {
   MarietteKernel(const OrtApi& ort_api, ort_mps::MetalContext* metal, Ort::ConstNode node);
-  ~MarietteKernel();
-  OrtStatus* Compute(OrtKernelContext* kernel_ctx);
+  ~MarietteKernel() override;
+  OrtStatus* ComputeIO(KernelIO& io) override;
 
-  const OrtApi& ort_api_;
-  ort_mps::MetalContext* metal_;
   std::string op_type_;
   float epsilon_ = 1e-6f;
 
@@ -74,6 +113,10 @@ struct MarietteKernel {
   size_t b_bytes_ = 0;
   size_t scales_bytes_ = 0;
 };
+
+// Per-subgraph execution plan built in Compile and run by the fused node's Compute. Defined in
+// ep.cc; forward-declared here so MetalEp can own the plans by fused-node name.
+struct SubgraphPlan;
 
 class MetalEp : public OrtEp, public ApiPtrs {
  public:
@@ -87,13 +130,7 @@ class MetalEp : public OrtEp, public ApiPtrs {
           ort_mps::MetalContext* metal, const OrtLogger& logger);
   ~MetalEp();
 
-  std::unordered_map<std::string, std::unique_ptr<AddKernel>>& AddKernels() { return add_kernels_; }
-  std::unordered_map<std::string, std::unique_ptr<CocoKernel>>& CocoKernels() {
-    return coco_kernels_;
-  }
-  std::unordered_map<std::string, std::unique_ptr<MarietteKernel>>& MarietteKernels() {
-    return mariette_kernels_;
-  }
+  std::unordered_map<std::string, std::unique_ptr<SubgraphPlan>>& Plans() { return plans_; }
   ort_mps::MetalContext* Metal() const { return metal_; }
   const OrtLogger* Logger() const { return logger_; }
 
@@ -116,7 +153,5 @@ class MetalEp : public OrtEp, public ApiPtrs {
   Config config_;
   ort_mps::MetalContext* metal_;
   const OrtLogger* logger_;  // for MPS_LOG
-  std::unordered_map<std::string, std::unique_ptr<AddKernel>> add_kernels_;
-  std::unordered_map<std::string, std::unique_ptr<CocoKernel>> coco_kernels_;
-  std::unordered_map<std::string, std::unique_ptr<MarietteKernel>> mariette_kernels_;
+  std::unordered_map<std::string, std::unique_ptr<SubgraphPlan>> plans_;
 };

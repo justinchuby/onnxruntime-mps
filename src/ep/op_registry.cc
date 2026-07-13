@@ -20,6 +20,9 @@ void RegisterBuiltinOps(OpRegistry& registry) {
   RegisterShapeOps(registry);
   RegisterReductionOps(registry);
   RegisterNormExtOps(registry);
+  RegisterAttentionExtOps(registry);
+  RegisterConvOps(registry);
+  RegisterSsmMiscOps(registry);
 }
 
 }  // namespace

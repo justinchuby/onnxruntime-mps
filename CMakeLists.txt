@@ -60,6 +60,9 @@ add_library(onnxruntime_mlx_ep SHARED
   src/ep/ops/shape.cc
   src/ep/ops/reduction.cc
   src/ep/ops/norm_ext.cc
+  src/ep/ops/attention_ext.cc
+  src/ep/ops/conv.cc
+  src/ep/ops/ssm_misc.cc
   src/ep/data_transfer.cc
   src/ep/metal_context.mm)
 

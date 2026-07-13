@@ -88,5 +88,8 @@ void RegisterMathOps(OpRegistry& registry);
 void RegisterShapeOps(OpRegistry& registry);
 void RegisterReductionOps(OpRegistry& registry);
 void RegisterNormExtOps(OpRegistry& registry);
+void RegisterAttentionExtOps(OpRegistry& registry);
+void RegisterConvOps(OpRegistry& registry);
+void RegisterSsmMiscOps(OpRegistry& registry);
 
 }  // namespace ort_mps_mlx

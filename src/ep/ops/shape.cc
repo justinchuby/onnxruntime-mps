@@ -90,6 +90,29 @@ bool ReadConstInt64AtClaim(Ort::ConstValueInfo vi, std::vector<int64_t>& out) {
   return true;
 }
 
+// Read the float32 values of a constant-initializer value info AT CLAIM TIME (the Resize `scales`
+// input form). Returns false (→ node left to CPU) if the value is not a readable float32 constant
+// initializer.
+bool ReadConstFloat32AtClaim(Ort::ConstValueInfo vi, std::vector<float>& out) {
+  ONNXTensorElementDataType t;
+  std::vector<int64_t> shape;
+  if (!TensorInfo(vi, t, &shape) || t != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+      !vi.IsConstantInitializer()) {
+    return false;
+  }
+  Ort::ConstValue value{nullptr};
+  if (!vi.GetInitializer(value).IsOK() || static_cast<const OrtValue*>(value) == nullptr) {
+    return false;
+  }
+  auto info = value.GetTensorTypeAndShapeInfo();
+  size_t count = info.GetElementCount();
+  const auto* p = static_cast<const float*>(value.GetTensorRawData());
+  if (p == nullptr && count != 0) return false;
+  out.clear();
+  if (count != 0) out.assign(p, p + count);
+  return true;
+}
+
 bool ReadConstBoolAtClaim(Ort::ConstValueInfo vi, std::vector<bool>& out) {
   ONNXTensorElementDataType t;
   std::vector<int64_t> shape;
@@ -156,6 +179,13 @@ bool HasAttribute(Ort::ConstNode node, const char* name) {
   Ort::Status status = node.GetAttributeByName(name, attr);
   return status.IsOK() && static_cast<const OrtOpAttr*>(attr) != nullptr &&
          attr.GetType() != ORT_OP_ATTR_UNDEFINED;
+}
+
+// A node input slot is "present" iff ORT handed back a non-null value info with a non-empty name.
+// ORT surfaces an omitted optional input (e.g. Resize's roi, or an unused scales-or-sizes slot) as
+// a NULL OrtValueInfo, so the pointer MUST be checked before any ValueInfo method is called.
+bool InputPresent(Ort::ConstValueInfo vi) {
+  return static_cast<const OrtValueInfo*>(vi) != nullptr && !vi.GetName().empty();
 }
 
 bool TensorScalarIsInt64(Ort::ConstNode node, const char* name, int64_t expected) {
@@ -274,6 +304,42 @@ mlx_array NormalizeIndices(TranslationContext& ctx, mlx_array indices, int dim) 
   mlx_array out = mlx_array_new();
   MLX_CHECK(mlx_where(&out, neg, wrapped, idx, ctx.stream()));
   return ctx.Keep(out);
+}
+
+// ---- Resize coordinate-transform helpers (host-side, ONNX/ORT-CPU exact) --------------------
+// The output coordinate `oj` (in the resized axis) is mapped back to a source coordinate in the
+// input axis exactly as ORT's CPU Resize does. `scale` is the per-axis scale actually used (the
+// provided `scales` value, or output_len/input_len when `sizes` is given).
+double ResizeSrcCoord(const std::string& mode, int64_t oj, double scale, int64_t in_len,
+                      int64_t out_len) {
+  if (mode == "align_corners") {
+    return out_len == 1 ? 0.0
+                        : static_cast<double>(oj) * (in_len - 1) / static_cast<double>(out_len - 1);
+  }
+  if (mode == "asymmetric") {
+    return static_cast<double>(oj) / scale;
+  }
+  if (mode == "pytorch_half_pixel") {
+    return out_len > 1 ? (oj + 0.5) / scale - 0.5 : 0.0;
+  }
+  // half_pixel (default)
+  return (oj + 0.5) / scale - 0.5;
+}
+
+// Apply nearest_mode rounding then clamp to a valid input index [0, in_len-1].
+int32_t ResizeNearestIndex(const std::string& nmode, double src, int64_t in_len) {
+  double v;
+  if (nmode == "floor") {
+    v = std::floor(src);
+  } else if (nmode == "ceil") {
+    v = std::ceil(src);
+  } else if (nmode == "round_prefer_ceil") {
+    v = std::floor(src + 0.5);  // ties -> up
+  } else {                      // round_prefer_floor (default)
+    v = std::ceil(src - 0.5);   // ties -> down
+  }
+  int64_t i = static_cast<int64_t>(v);
+  return static_cast<int32_t>(Clamp(i, 0, in_len - 1));
 }
 
 // ---- handlers -------------------------------------------------------------------------------
@@ -674,6 +740,104 @@ void ConstantOfShapeOp(TranslationContext& ctx, const NodeDesc& n) {
   ctx.Bind(n.outputs[0], ctx.Keep(r));
 }
 
+// Resize (ai.onnx): nearest + (bi)linear sampling of the spatial axes. The claim guarantees a
+// constant `scales` (input 2) or `sizes` (input 3), a static input/output shape, an MLX float dtype,
+// and a supported (mode, coordinate_transformation_mode, nearest_mode) combination; unsupported
+// forms (cubic, roi/tf_crop, exclude_outside, antialias, `axes`, dynamic params, >4D) are left to
+// ORT CPU. Sampling is SEPARABLE: each resized axis is handled independently by gathering along it
+// (mlx_take_axis) with source indices computed exactly as ORT CPU does; linear additionally gathers
+// the two integer neighbors per axis and blends them by the fractional weight. All coordinate math
+// is host-side (input/output lengths and scales are known at translate time) so the numbers match
+// ORT CPU up to float rounding.
+void ResizeOp(TranslationContext& ctx, const NodeDesc& n) {
+  mlx_array data = ctx.Resolve(n.inputs[0]);
+  std::vector<int> in_shape = TranslationContext::ShapeOf(data);
+  int rank = static_cast<int>(in_shape.size());
+
+  const std::string mode = n.strings.count("mode") ? n.strings.at("mode") : "nearest";
+  const std::string ctm = n.strings.count("coordinate_transformation_mode")
+                              ? n.strings.at("coordinate_transformation_mode")
+                              : "half_pixel";
+  const std::string nmode =
+      n.strings.count("nearest_mode") ? n.strings.at("nearest_mode") : "round_prefer_floor";
+
+  // Per-axis output length and the scale used by the coordinate transform.
+  std::vector<int> out_len(rank);
+  std::vector<double> scale(rank);
+  const bool have_sizes = n.inputs.size() > 3 && n.inputs[3].source != Src::Absent;
+  if (have_sizes) {
+    std::vector<int64_t> sizes = ReadInts(ctx, n.inputs[3]);
+    for (int i = 0; i < rank; ++i) {
+      out_len[i] = static_cast<int>(sizes[i]);
+      scale[i] = static_cast<double>(out_len[i]) / in_shape[i];
+    }
+  } else {
+    HostBytes h = ctx.RawHost(n.inputs[2]);
+    const auto* sc = static_cast<const float*>(h.data);
+    for (int i = 0; i < rank; ++i) {
+      scale[i] = sc[i];
+      out_len[i] = static_cast<int>(std::floor(scale[i] * in_shape[i]));
+    }
+  }
+
+  const bool linear = mode == "linear";
+  if (linear) data = ctx.Astype(data, MLX_FLOAT32);  // blend in fp32, restore dtype at the end
+
+  for (int ax = 0; ax < rank; ++ax) {
+    const int64_t li = in_shape[ax];
+    const int64_t lo = out_len[ax];
+    if (lo == li) continue;  // scale==1 axis (e.g. N,C) is left untouched
+
+    if (!linear) {
+      std::vector<int32_t> idx(lo);
+      for (int64_t j = 0; j < lo; ++j) {
+        idx[j] = ResizeNearestIndex(nmode, ResizeSrcCoord(ctm, j, scale[ax], li, lo), li);
+      }
+      int ishape[] = {static_cast<int>(lo)};
+      mlx_array idx_arr = ctx.Keep(mlx_array_new_data(idx.data(), ishape, 1, MLX_INT32));
+      mlx_array r = mlx_array_new();
+      MLX_CHECK(mlx_take_axis(&r, data, idx_arr, ax, ctx.stream()));
+      data = ctx.Keep(r);
+      continue;
+    }
+
+    // Linear: gather the two integer neighbors and blend by the fractional weight.
+    std::vector<int32_t> idx_lo(lo), idx_hi(lo);
+    std::vector<float> w_lo(lo), w_hi(lo);
+    for (int64_t j = 0; j < lo; ++j) {
+      double src = ResizeSrcCoord(ctm, j, scale[ax], li, lo);
+      double x0 = std::floor(src);
+      double frac = src - x0;
+      int64_t i0 = static_cast<int64_t>(x0);
+      idx_lo[j] = static_cast<int32_t>(Clamp(i0, 0, li - 1));
+      idx_hi[j] = static_cast<int32_t>(Clamp(i0 + 1, 0, li - 1));
+      w_hi[j] = static_cast<float>(frac);
+      w_lo[j] = static_cast<float>(1.0 - frac);
+    }
+    int ishape[] = {static_cast<int>(lo)};
+    mlx_array lo_idx = ctx.Keep(mlx_array_new_data(idx_lo.data(), ishape, 1, MLX_INT32));
+    mlx_array hi_idx = ctx.Keep(mlx_array_new_data(idx_hi.data(), ishape, 1, MLX_INT32));
+    // Weights broadcast along the resized axis: shape is 1 everywhere except `lo` at `ax`.
+    std::vector<int> wshape(rank, 1);
+    wshape[ax] = static_cast<int>(lo);
+    mlx_array w_lo_arr =
+        ctx.Keep(mlx_array_new_data(w_lo.data(), wshape.data(), rank, MLX_FLOAT32));
+    mlx_array w_hi_arr =
+        ctx.Keep(mlx_array_new_data(w_hi.data(), wshape.data(), rank, MLX_FLOAT32));
+
+    mlx_array lo_g = mlx_array_new();
+    MLX_CHECK(mlx_take_axis(&lo_g, data, lo_idx, ax, ctx.stream()));
+    mlx_array hi_g = mlx_array_new();
+    MLX_CHECK(mlx_take_axis(&hi_g, data, hi_idx, ax, ctx.stream()));
+    mlx_array blended =
+        ctx.AddA(ctx.Mul(ctx.Keep(lo_g), w_lo_arr), ctx.Mul(ctx.Keep(hi_g), w_hi_arr));
+    data = blended;
+  }
+
+  if (linear) data = ctx.Astype(data, MlxDtypeFromOnnx(n.outputs[0].type));
+  ctx.Bind(n.outputs[0], Contiguous(ctx, data));
+}
+
 // ---- claim predicates -----------------------------------------------------------------------
 
 // Gather / GatherElements: movable data, matching output dtype, int32/int64 (dynamic) indices.
@@ -1032,6 +1196,77 @@ bool ConstantOfShapeClaim(Ort::ConstNode node) {
          TensorScalarIsInt64(node, "value", -1);
 }
 
+// Resize: claim ONLY the exactly-translatable forms. Requires a constant `scales`/`sizes`, a static
+// input+output shape, an MLX float dtype, spatial-only resize (N,C unchanged for rank>=3), and a
+// supported (mode, coordinate_transformation_mode, nearest_mode). Everything else — cubic, roi /
+// tf_crop_and_resize, exclude_outside, antialias, the `axes` attribute, non-"stretch"
+// keep_aspect_ratio_policy, dynamic params and >4D — is left to ORT CPU.
+bool ResizeClaim(Ort::ConstNode node) {
+  const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
+  const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
+  if (inputs.empty() || inputs.size() > 4 || outputs.size() != 1) return false;
+
+  ONNXTensorElementDataType data_t, out_t;
+  std::vector<int64_t> in_shape, out_shape;
+  if (!StaticTensorInfo(inputs[0], data_t, in_shape) ||
+      !StaticTensorInfo(outputs[0], out_t, out_shape)) {
+    return false;
+  }
+  if (!IsMlxFloatType(data_t) || out_t != data_t) return false;
+  const int rank = static_cast<int>(in_shape.size());
+  if (rank < 1 || rank > 4 || out_shape.size() != static_cast<size_t>(rank)) return false;
+
+  const std::string mode = StringAttribute(node, "mode", "nearest");
+  if (mode != "nearest" && mode != "linear") return false;
+  const std::string ctm = StringAttribute(node, "coordinate_transformation_mode", "half_pixel");
+  if (ctm != "half_pixel" && ctm != "asymmetric" && ctm != "align_corners" &&
+      ctm != "pytorch_half_pixel") {
+    return false;
+  }
+  if (mode == "nearest") {
+    const std::string nmode = StringAttribute(node, "nearest_mode", "round_prefer_floor");
+    if (nmode != "round_prefer_floor" && nmode != "round_prefer_ceil" && nmode != "floor" &&
+        nmode != "ceil") {
+      return false;
+    }
+  }
+  if (IntAttribute(node, "exclude_outside", 0) != 0) return false;
+  if (IntAttribute(node, "antialias", 0) != 0) return false;
+  if (HasAttribute(node, "axes")) return false;
+  if (StringAttribute(node, "keep_aspect_ratio_policy", "stretch") != "stretch") return false;
+
+  // roi (input 1) must be omitted (tf_crop_and_resize is left to CPU).
+  if (inputs.size() >= 2 && InputPresent(inputs[1])) return false;
+
+  const bool has_scales = inputs.size() >= 3 && InputPresent(inputs[2]);
+  const bool has_sizes = inputs.size() >= 4 && InputPresent(inputs[3]);
+  if (has_scales == has_sizes) return false;  // exactly one of scales/sizes
+
+  std::vector<int64_t> computed(rank);
+  if (has_sizes) {
+    std::vector<int64_t> sizes;
+    if (!ReadConstInt64AtClaim(inputs[3], sizes) || sizes.size() != static_cast<size_t>(rank)) {
+      return false;
+    }
+    computed = sizes;
+  } else {
+    std::vector<float> scales;
+    if (!ReadConstFloat32AtClaim(inputs[2], scales) || scales.size() != static_cast<size_t>(rank)) {
+      return false;
+    }
+    for (int i = 0; i < rank; ++i) {
+      if (!(scales[i] > 0.0f)) return false;
+      computed[i] = static_cast<int64_t>(std::floor(static_cast<double>(scales[i]) * in_shape[i]));
+    }
+  }
+  for (int i = 0; i < rank; ++i) {
+    if (computed[i] < 1 || computed[i] != out_shape[i]) return false;
+  }
+  // Spatial-only: outer batch/channel axes (N,C) must be unchanged for rank>=3.
+  if (rank >= 3 && (computed[0] != in_shape[0] || computed[1] != in_shape[1])) return false;
+  return true;
+}
+
 }  // namespace
 
 void RegisterShapeOps(OpRegistry& registry) {
@@ -1061,6 +1296,7 @@ void RegisterShapeOps(OpRegistry& registry) {
   registry.Register({"", "Constant", kAnyOpset, kAnyOpset, &ConstantOp, &ConstantClaim});
   registry.Register(
       {"", "ConstantOfShape", kAnyOpset, kAnyOpset, &ConstantOfShapeOp, &ConstantOfShapeClaim});
+  registry.Register({"", "Resize", kAnyOpset, kAnyOpset, &ResizeOp, &ResizeClaim});
 }
 
 }  // namespace ort_mps_mlx

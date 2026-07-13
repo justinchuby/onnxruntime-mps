@@ -29,6 +29,13 @@ bool NodeClaimable(Ort::ConstNode node, const MetalEp::Config& config) {
   return ort_mps_mlx::Claimable(node);
 }
 
+// ORT surfaces an OMITTED interior optional node input (e.g. Resize's `roi`, Clip's `min`) as a
+// NULL OrtValueInfo. Dereferencing it via GetName() segfaults, so treat a null info as an unnamed
+// (absent) input; callers keep positional indices intact by still visiting the slot.
+std::string InputName(const Ort::ConstValueInfo& vi) {
+  return static_cast<const OrtValueInfo*>(vi) == nullptr ? std::string() : vi.GetName();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -135,7 +142,7 @@ std::vector<std::vector<size_t>> BuildConvexClusters(const std::vector<Ort::Cons
   for (size_t j = 0; j < n; ++j) {
     std::unordered_set<size_t> seen;
     for (const auto& in : nodes[j].GetInputs()) {
-      std::string name = in.GetName();
+      std::string name = InputName(in);
       if (name.empty()) continue;
       auto it = producer.find(name);
       if (it == producer.end() || it->second == j) continue;
@@ -380,7 +387,7 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
       {
         std::vector<Ort::ConstValueInfo> ins = fused_node.GetInputs();
         for (size_t k = 0; k < ins.size(); ++k) {
-          std::string name = ins[k].GetName();
+          std::string name = InputName(ins[k]);
           if (!name.empty()) ctx_input_index.emplace(std::move(name), k);
         }
       }
@@ -433,7 +440,7 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
       for (size_t j = 0; j < snodes.size(); ++j) {
         std::unordered_set<size_t> seen;
         for (const auto& in : snodes[j].GetInputs()) {
-          std::string name = in.GetName();
+          std::string name = InputName(in);
           if (name.empty()) continue;
           auto it = producer.find(name);
           if (it == producer.end() || it->second == j) continue;
@@ -513,7 +520,7 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
 
         for (const auto& in : node.GetInputs()) {
           ort_mps_mlx::TensorRef tr;
-          tr.name = in.GetName();
+          tr.name = InputName(in);
           if (tr.name.empty()) {
             tr.source = ort_mps_mlx::Src::Absent;
           } else if (producer.count(tr.name)) {

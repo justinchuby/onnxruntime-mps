@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "ep_factory.h"
+#include "mlx_backend.h"
 
 namespace {
 
@@ -1037,6 +1038,11 @@ struct SubgraphPlan {
   std::unordered_map<std::string, void*> intermediate_pool;
   std::unordered_map<std::string, size_t> intermediate_bytes;
 
+  // Phase-0 MLX path (populated in Compile only when ONNX_GENAI_METAL_EP_MLX is set and MLX was
+  // compiled in). When present, RunSubgraph hands the WHOLE subgraph to MLX in one eval instead of
+  // encoding the hand kernels. nullptr => the default hand-kernel Metal path runs unchanged.
+  std::unique_ptr<ort_mps_mlx::Plan, ort_mps_mlx::PlanDeleter> mlx_plan;
+
   ~SubgraphPlan() {
     if (ep == nullptr) return;
     for (auto& kv : intermediate_pool) {
@@ -1154,6 +1160,15 @@ OrtStatus* RunSubgraph(SubgraphPlan& plan, OrtKernelContext* kernel_context) {
   try {
     Ort::KernelContext ctx(kernel_context);
     ort_mps::MetalContext* metal = ep->Metal();
+
+    // Phase-0 MLX path: hand the whole fused subgraph to MLX (one mlx_eval at the boundary).
+    if (plan.mlx_plan) {
+      std::string mlx_err;
+      if (!ort_mps_mlx::RunPlan(*plan.mlx_plan, ctx, mlx_err)) {
+        return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP MLX subgraph failed: " + mlx_err).c_str());
+      }
+      return nullptr;
+    }
 
     std::string err;
     if (!metal->BeginBatch(err)) {
@@ -1472,6 +1487,9 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
                                              OrtNodeComputeInfo** node_compute_infos,
                                              OrtNode** /*ep_context_nodes*/) noexcept {
   auto* ep = static_cast<MetalEp*>(this_ptr);
+  const OrtApi& ort_api_ = ep->ort_api;  // for MPS_LOG
+  const OrtLogger* logger_ = ep->logger_;
+  const bool mlx_enabled = ort_mps_mlx::Enabled();
   try {
     for (size_t i = 0; i < count; ++i) {
       Ort::ConstGraph graph{graphs[i]};
@@ -1480,6 +1498,7 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
 
       auto plan = std::make_unique<SubgraphPlan>();
       plan->ep = ep;
+      std::vector<ort_mps_mlx::NodeDesc> mlx_nodes;  // parallel MLX plan (only used when enabled)
 
       // Fused-node input/output name -> OrtKernelContext index (the runtime I/O boundary).
       std::unordered_map<std::string, size_t> ctx_input_index;
@@ -1626,6 +1645,65 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
         }
 
         plan->nodes.push_back(std::move(np));
+
+        if (mlx_enabled) {
+          ort_mps_mlx::NodeDesc mnd;
+          mnd.op_type = node.GetOperatorType();
+          mnd.domain = node.GetDomain();
+          // Capture the attributes the MLX translator reads (harmless defaults otherwise).
+          mnd.ints["K"] = IntAttribute(node, "K", 0);
+          mnd.ints["N"] = IntAttribute(node, "N", 0);
+          mnd.ints["bits"] = IntAttribute(node, "bits", 4);
+          mnd.ints["block_size"] = IntAttribute(node, "block_size", 32);
+          mnd.ints["num_heads"] = IntAttribute(node, "num_heads", 0);
+          mnd.ints["kv_num_heads"] = IntAttribute(node, "kv_num_heads", 0);
+          mnd.ints["do_rotary"] = IntAttribute(node, "do_rotary", 1);
+          mnd.ints["rotary_interleaved"] = IntAttribute(node, "rotary_interleaved", 0);
+          mnd.floats["scale"] = FloatAttribute(node, "scale", 0.0f);
+          mnd.floats["epsilon"] = FloatAttribute(node, "epsilon", 1e-6f);
+          const NodePlan& built = plan->nodes.back();
+          for (const InputRef& ir : built.inputs) {
+            ort_mps_mlx::TensorRef tr;
+            tr.name = ir.name;
+            tr.source = static_cast<ort_mps_mlx::Src>(ir.source);
+            tr.ctx_index = ir.ctx_index;
+            tr.init_data = ir.init_data;
+            tr.init_shape = ir.init_shape;
+            tr.init_type = ir.init_type;
+            tr.init_count = ir.init_count;
+            // ORT hoists constant initializers (weights/scales/biases/caches) into the fused
+            // subgraph's context inputs (drop_constant_initializers=false), so both paths read them
+            // via ctx.GetInput at Run. Their compile-time init_data pointers are graph-owned and go
+            // stale after Compile, so we must NOT dereference them at Run. We instead mark which ctx
+            // inputs are constant; the MLX translator wraps/repacks each constant ONCE (from live ctx
+            // data on the first Run) and caches it on the plan, avoiding a per-decode-step recopy of
+            // the embedding table / cos-sin caches. The hand path's InputRef is left untouched.
+            tr.constant = tr.source == ort_mps_mlx::Src::CtxInput &&
+                          initializers.find(tr.name) != initializers.end();
+            mnd.inputs.push_back(std::move(tr));
+          }
+          for (const OutputRef& orf : built.outputs) {
+            ort_mps_mlx::OutRef o;
+            o.name = orf.name;
+            o.external = orf.external;
+            o.ctx_index = orf.ctx_index;
+            o.type = orf.type;
+            mnd.outputs.push_back(std::move(o));
+          }
+          mlx_nodes.push_back(std::move(mnd));
+        }
+      }
+
+      if (mlx_enabled) {
+        std::string mlx_err;
+        plan->mlx_plan.reset(ort_mps_mlx::BuildPlan(std::move(mlx_nodes), mlx_err));
+        if (!plan->mlx_plan) {
+          MPS_LOG(WARNING, "MetalEP: MLX path requested but disabled for this subgraph ("
+                               << mlx_err << "); using hand-kernel path");
+        } else {
+          MPS_LOG(INFO, "MetalEP: MLX path ENABLED for fused subgraph " << fused_name
+                                                                        << " (whole-subgraph one-eval)");
+        }
       }
 
       ep->plans_[fused_name] = std::move(plan);

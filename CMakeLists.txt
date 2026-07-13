@@ -52,6 +52,7 @@ add_library(onnxruntime_mps_ep SHARED
   src/ep/entry.cc
   src/ep/ep_factory.cc
   src/ep/ep.cc
+  src/ep/mlx_backend.cc
   src/ep/data_transfer.cc
   src/ep/metal_context.mm)
 
@@ -60,6 +61,25 @@ target_include_directories(onnxruntime_mps_ep PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ep
   ${CMAKE_CURRENT_BINARY_DIR}/generated
   ${ORT_INCLUDE_DIR})
+
+# --- Optional MLX (mlx-c) Phase-0 backend -----------------------------------------
+# OFF by default: the shipping build/behaviour is the hand-kernel Metal path, unchanged and with
+# zero third-party dependency. When ON, mlx_backend.cc gains the real ONNX->MLX translation and the
+# runtime flag ONNX_GENAI_METAL_EP_MLX=1 routes the whole fused decoder subgraph through MLX.
+option(ORT_MPS_ENABLE_MLX "Build the flag-gated MLX (mlx-c) subgraph backend (Phase-0)" OFF)
+if(ORT_MPS_ENABLE_MLX)
+  execute_process(COMMAND brew --prefix mlx-c OUTPUT_VARIABLE MLXC_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+  execute_process(COMMAND brew --prefix mlx   OUTPUT_VARIABLE MLX_PREFIX  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  find_library(MLXC_LIB mlxc PATHS ${MLXC_PREFIX}/lib REQUIRED)
+  find_library(MLX_LIB  mlx  PATHS ${MLX_PREFIX}/lib  REQUIRED)
+  find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+  message(STATUS "MLX backend ENABLED: mlx-c=${MLXC_PREFIX} mlx=${MLX_PREFIX}")
+  target_compile_definitions(onnxruntime_mps_ep PRIVATE ORT_MPS_HAS_MLX=1)
+  target_include_directories(onnxruntime_mps_ep PRIVATE ${MLXC_PREFIX}/include)
+  target_link_libraries(onnxruntime_mps_ep PRIVATE ${MLXC_LIB} ${MLX_LIB} ${ACCELERATE_FRAMEWORK})
+  set_property(TARGET onnxruntime_mps_ep APPEND PROPERTY BUILD_RPATH "${MLXC_PREFIX}/lib;${MLX_PREFIX}/lib")
+  set_property(TARGET onnxruntime_mps_ep APPEND PROPERTY INSTALL_RPATH "${MLXC_PREFIX}/lib;${MLX_PREFIX}/lib")
+endif()
 
 # Hide everything except the two exported entry points (which use visibility("default")).
 target_compile_options(onnxruntime_mps_ep PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -Wall)

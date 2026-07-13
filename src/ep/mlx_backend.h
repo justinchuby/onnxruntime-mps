@@ -57,11 +57,20 @@ struct OutRef {
 struct NodeDesc {
   std::string op_type;
   std::string domain;
+  // The opset version in which this node's op was first defined (Ort::ConstNode::GetSinceVersion),
+  // threaded from ep.cc so the registry can dispatch opset-23 vs opset-24 variants of an op to
+  // different handlers. 0 when unknown (matches any registration).
+  int since_version = 0;
   std::unordered_map<std::string, int64_t> ints;
   std::unordered_map<std::string, float> floats;
   std::vector<TensorRef> inputs;
   std::vector<OutRef> outputs;
 };
+
+// Claim-time membership check: can the MLX backend translate (domain, op_type) at this opset? Backed
+// by the SAME registry the run-time translator uses, so a claimed op is always translatable. Called
+// from ep.cc::GetCapability (in addition to the per-op dtype/shape/attribute claim predicates).
+bool Supported(const std::string& domain, const std::string& op_type, int since_version);
 
 // Opaque compiled MLX plan (owns the persistent repacked-weight / cos-sin cache MLX arrays).
 struct Plan;

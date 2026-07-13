@@ -51,3 +51,4 @@ build/
 # Generated e2e prompt fixture (regenerate with tests/e2e/prepare_prompt.py).
 tests/e2e/prompt_tokens.txt
 build-mlx/
+.vscode/

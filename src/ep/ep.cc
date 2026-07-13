@@ -38,6 +38,15 @@ bool IsFloatType(ONNXTensorElementDataType type) {
          type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
 }
 
+// Float dtypes the dtype-generic MLX paths (elementwise, activation, softmax, normalization, cast)
+// handle: fp32, fp16 AND bf16. MLX carries the resolved dtype through these ops with no per-dtype
+// code, so claiming bf16/fp16 alongside fp32 just widens which nodes the EP takes.
+bool IsMlxFloatType(ONNXTensorElementDataType type) {
+  return type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+         type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
+}
+
 int64_t IntAttribute(Ort::ConstNode node, const char* name, int64_t default_value) {
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
@@ -96,7 +105,7 @@ bool CocoClaimable(Ort::ConstNode node) {
     return false;
   }
 
-  // Elementwise binary ops MLX translates: fp16 Add (fp32 Add is AddClaimable), Mul, and Sub
+  // Elementwise binary ops MLX translates: fp16/bf16 Add (fp32 Add is AddClaimable), Mul, and Sub
   // (fp or int64). Div is NOT translated to MLX and is left to ORT's CPU EP.
   if (domain.empty() && (op == "Add" || op == "Mul" || op == "Sub")) {
     if (inputs.size() != 2) return false;
@@ -106,12 +115,14 @@ bool CocoClaimable(Ort::ConstNode node) {
       return false;
     }
     if (op == "Add") {
-      return a == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
+      // fp32 Add is claimed by AddClaimable; here we take the fp16/bf16 activation/residual adds.
+      return a == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 ||
+             a == ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16;
     }
     if (op == "Sub" && a == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
       return true;
     }
-    return IsFloatType(a);
+    return IsMlxFloatType(a);
   }
 
   // Sigmoid is MLX-translatable. SiLU/Swish/Gelu are NOT (left to CPU).
@@ -119,18 +130,18 @@ bool CocoClaimable(Ort::ConstNode node) {
     if (inputs.size() != 1) return false;
     ONNXTensorElementDataType input_type;
     return TensorInfo(inputs[0], input_type) && input_type == output_type &&
-           IsFloatType(input_type);
+           IsMlxFloatType(input_type);
   }
 
   if (domain.empty() && op == "Cast" && inputs.size() == 1) {
     ONNXTensorElementDataType input_type;
     if (!TensorInfo(inputs[0], input_type)) return false;
-    return (input_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-            output_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) ||
-           (input_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16 &&
-            output_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) ||
-           (input_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
-            output_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32);
+    // Float<->float casts among fp32/fp16/bf16 (any distinct pair) plus the int64->int32 index cast.
+    const bool in_float = IsMlxFloatType(input_type);
+    const bool out_float = IsMlxFloatType(output_type);
+    if (in_float && out_float && input_type != output_type) return true;
+    return input_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 &&
+           output_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
   }
 
   if (domain == "com.microsoft" && op == "GatherBlockQuantized") {
@@ -165,12 +176,15 @@ bool MarietteClaimable(Ort::ConstNode node) {
     return false;
   }
   ONNXTensorElementDataType out_type;
-  if (!TensorInfo(outputs[0], out_type) || out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    return false;  // fp32-only path for now (matches the cpu-recipe graph)
+  if (!TensorInfo(outputs[0], out_type)) {
+    return false;
   }
+  // MatMulNBits and GroupQueryAttention are fp32-only (quant repack + SDPA path match the cpu-recipe
+  // graph); the normalization/softmax ops below are dtype-generic (fp32/fp16/bf16).
 
   // MatMulNBits: A[f32], B[uint8 packed int4], scales[f32] (+ optional bias), bits=4, block=32.
   if (domain == "com.microsoft" && op == "MatMulNBits") {
+    if (out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
     if (inputs.size() != 3 && inputs.size() != 4) return false;
     ONNXTensorElementDataType a, b, s;
     if (!TensorInfo(inputs[0], a) || !TensorInfo(inputs[1], b) || !TensorInfo(inputs[2], s)) {
@@ -187,35 +201,34 @@ bool MarietteClaimable(Ort::ConstNode node) {
     return IntAttribute(node, "bits", 4) == 4 && IntAttribute(node, "block_size", 32) == 32;
   }
 
-  // RMSNormalization (ai.onnx): X[f32], scale[f32], axis == -1.
+  // RMSNormalization (ai.onnx): X, scale, axis == -1. fp32/fp16/bf16 (mlx_fast_rms_norm is generic).
   if (domain.empty() && op == "RMSNormalization") {
     if (inputs.size() != 2) return false;
     ONNXTensorElementDataType x, g;
     if (!TensorInfo(inputs[0], x) || !TensorInfo(inputs[1], g)) return false;
-    if (x != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || g != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    if (!IsMlxFloatType(x) || g != x || out_type != x) {
       return false;
     }
     const int64_t axis = IntAttribute(node, "axis", -1);
     return axis == -1;
   }
 
-  // SkipSimplifiedLayerNormalization (com.microsoft): input, skip, gamma (all f32).
+  // SkipSimplifiedLayerNormalization (com.microsoft): input, skip, gamma. fp32/fp16/bf16.
   if (domain == "com.microsoft" && op == "SkipSimplifiedLayerNormalization") {
     if (inputs.size() != 3) return false;  // no optional bias/beta in our graph
     ONNXTensorElementDataType i0, i1, i2;
     if (!TensorInfo(inputs[0], i0) || !TensorInfo(inputs[1], i1) || !TensorInfo(inputs[2], i2)) {
       return false;
     }
-    return i0 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && i1 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-           i2 == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+    return IsMlxFloatType(i0) && i1 == i0 && i2 == i0 && out_type == i0;
   }
 
-  // Softmax (ai.onnx): single f32 input, softmax over the last axis.
+  // Softmax (ai.onnx): single input, softmax over the last axis. fp32/fp16/bf16.
   if (domain.empty() && op == "Softmax") {
     if (inputs.size() != 1) return false;
     ONNXTensorElementDataType x;
     std::vector<int64_t> shape;
-    if (!TensorInfo(inputs[0], x, &shape) || x != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
+    if (!TensorInfo(inputs[0], x, &shape) || !IsMlxFloatType(x) || out_type != x) return false;
     const int64_t rank = static_cast<int64_t>(shape.size());
     const int64_t axis = IntAttribute(node, "axis", -1);
     return rank > 0 && (axis == -1 || axis == rank - 1);
@@ -224,6 +237,7 @@ bool MarietteClaimable(Ort::ConstNode node) {
   // GroupQueryAttention (com.microsoft): fp32 Q/K/V + past/present K/V share-buffer, rotary caches.
   // We claim the standard separate-QKV, 9-input decode/prefill layout used by our Qwen graph.
   if (domain == "com.microsoft" && op == "GroupQueryAttention") {
+    if (out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
     if (inputs.size() != 9) return false;  // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
     // q/k/v/past_k/past_v/cos/sin are fp32; seqlens_k/total_seq are int32.
     const int fp32_inputs[] = {0, 1, 2, 3, 4, 7, 8};
@@ -265,12 +279,17 @@ bool AddClaimable(Ort::ConstNode node) {
 }
 
 // Unified predicate: is `node` translatable to MLX by any of the op families (respecting config)?
-// The claimed set is exactly the set of ops mlx_backend.cc can translate; there is no fallback.
+// The claimed set is exactly the set of ops the MLX registry can translate; there is no fallback.
+// A node must (a) pass a family's dtype/shape/attribute claim predicate AND (b) have a matching
+// handler in the ONNX->MLX registry for its (domain, op_type, opset). Both conditions consult the
+// SAME registry the run-time translator dispatches through, so "claimed" can never outrun
+// "translatable".
 bool NodeClaimable(Ort::ConstNode node, const MetalEp::Config& config) {
-  if (config.claim_add && AddClaimable(node)) return true;
-  if (config.claim_mariette && MarietteClaimable(node)) return true;
-  if (config.claim_coco && CocoClaimable(node)) return true;
-  return false;
+  const bool family_ok = (config.claim_add && AddClaimable(node)) ||
+                         (config.claim_mariette && MarietteClaimable(node)) ||
+                         (config.claim_coco && CocoClaimable(node));
+  if (!family_ok) return false;
+  return ort_mps_mlx::Supported(node.GetDomain(), node.GetOperatorType(), node.GetSinceVersion());
 }
 
 }  // namespace
@@ -714,6 +733,9 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
         ort_mps_mlx::NodeDesc mnd;
         mnd.op_type = node.GetOperatorType();
         mnd.domain = node.GetDomain();
+        // Opset version the op was introduced at — threaded so the MLX registry can dispatch
+        // opset-specific handler variants (e.g. Attention opset23 vs opset24) by version range.
+        mnd.since_version = node.GetSinceVersion();
         // Attributes the MLX translator reads (harmless defaults otherwise).
         mnd.ints["K"] = IntAttribute(node, "K", 0);
         mnd.ints["N"] = IntAttribute(node, "N", 0);

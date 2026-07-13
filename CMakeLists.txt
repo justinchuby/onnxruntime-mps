@@ -51,6 +51,11 @@ add_library(onnxruntime_mlx_ep SHARED
   src/ep/ep_factory.cc
   src/ep/ep.cc
   src/ep/mlx_backend.cc
+  src/ep/op_registry.cc
+  src/ep/ops/elementwise.cc
+  src/ep/ops/norm.cc
+  src/ep/ops/attention.cc
+  src/ep/ops/quant.cc
   src/ep/data_transfer.cc
   src/ep/metal_context.mm)
 

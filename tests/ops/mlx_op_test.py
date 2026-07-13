@@ -8,10 +8,12 @@ hand-written Metal kernels — so this suite validates the ONNX->MLX translation
 Models are constructed with the ONNX IR (``onnx_ir``: ``ir.Value`` / ``ir.Node`` / ``ir.Graph`` /
 ``ir.Model``), not ``onnx.helper``.
 
-Only ops the EP CLAIMS and the MLX translator supports (see mlx_backend.cc ``Supported()``) are
-exercised here: MatMulNBits, GroupQueryAttention (rope in-op), RMSNormalization,
-SkipSimplifiedLayerNormalization, GatherBlockQuantized, Softmax, Add, Mul, Sub, Sigmoid, Cast.
-Ops the EP no longer claims (Div, Gelu, RotaryEmbedding, Reshape, Transpose, Concat) are
+Only ops the EP CLAIMS and the MLX translator supports (registered in the modular op registry,
+src/ep/ops/*.cc) are exercised here: MatMulNBits, GroupQueryAttention (rope in-op), RMSNormalization,
+SkipSimplifiedLayerNormalization, GatherBlockQuantized, Softmax, Add, Mul, Sub, Sigmoid, Cast. The
+dtype-generic paths (elementwise/activation/softmax/normalization/cast) are additionally exercised in
+fp16 (vs ORT CPU) and bf16 (bf16-interior subgraph vs a numpy fp32 reference — ORT CPU has no bf16
+kernels). Ops the EP no longer claims (Div, Gelu, RotaryEmbedding, Reshape, Transpose, Concat) are
 intentionally NOT tested: they fall back to ORT CPU and would only compare CPU-vs-CPU.
 """
 
@@ -90,6 +92,94 @@ def compare(
             got, want, rtol=rtol, atol=atol, err_msg=f"{name} output {index}"
         )
     print(f"PASS {name}")
+
+
+def run_mlx(model: bytes, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+    """Run a model through the MLX EP (CPU fallback available) and return its outputs."""
+    options = ort.SessionOptions()
+    options.log_severity_level = 3
+    session = ort.InferenceSession(
+        model, options, providers=["MLXExecutionProvider", "CPUExecutionProvider"]
+    )
+    return session.run(None, feeds)
+
+
+def compare_ref(
+    name: str,
+    model: bytes,
+    feeds: dict[str, np.ndarray],
+    expected: list[np.ndarray],
+    *,
+    rtol: float,
+    atol: float,
+) -> None:
+    """Compare the MLX EP output against a precomputed numpy reference.
+
+    Used for bfloat16 coverage: ORT's CPU EP ships no bf16 kernels for these ops (and the ORT Python
+    binding cannot feed bf16 arrays), so we cannot build a CPU reference session. Instead the bf16
+    compute is kept INSIDE an MLX-claimed subgraph (fp32 in -> Cast bf16 -> op(bf16) -> Cast fp32
+    out) and the fp32 boundary output is compared, tolerance-gated (~1e-2), against a numpy fp32
+    reference. This validates the MLX bf16 path end-to-end.
+    """
+    actual = run_mlx(model, feeds)
+    for index, (got, want) in enumerate(zip(actual, expected, strict=True)):
+        np.testing.assert_allclose(
+            got, want, rtol=rtol, atol=atol, err_msg=f"{name} output {index}"
+        )
+    print(f"PASS {name}")
+
+
+def bf16_interior_model(
+    op_type: str,
+    float_inputs: list[tuple[str, list[int]]],
+    out_shape: list[int],
+    *,
+    domain: str = "",
+    attributes: dict[str, object] | None = None,
+) -> bytes:
+    """Build fp32-in -> Cast(bf16) -> op(bf16) -> Cast(fp32)-out. Every node (both Casts + the op)
+    is MLX-claimable, so the whole subgraph runs in bf16 on MLX while the boundaries stay fp32
+    (feedable/readable through the ORT Python binding)."""
+    fp_inputs = [tensor(name, DataType.FLOAT, shape) for name, shape in float_inputs]
+    bf_inputs = [tensor(f"{name}_bf", DataType.BFLOAT16, shape) for name, shape in float_inputs]
+    nodes = [
+        ir.Node(
+            "", "Cast", [fp], attributes=[ir.AttrInt64("to", int(DataType.BFLOAT16))], outputs=[bf]
+        )
+        for fp, bf in zip(fp_inputs, bf_inputs, strict=True)
+    ]
+    bf_out = tensor("y_bf", DataType.BFLOAT16, out_shape)
+    nodes.append(
+        ir.Node(
+            domain,
+            op_type,
+            bf_inputs,
+            attributes=[_attr(k, v) for k, v in (attributes or {}).items()],
+            outputs=[bf_out],
+        )
+    )
+    fp_out = tensor("out", DataType.FLOAT, out_shape)
+    nodes.append(
+        ir.Node(
+            "", "Cast", [bf_out], attributes=[ir.AttrInt64("to", int(DataType.FLOAT))], outputs=[fp_out]
+        )
+    )
+    opset_imports = {"": 24}
+    if domain:
+        opset_imports[domain] = 1
+    graph = ir.Graph(
+        fp_inputs, [fp_out], nodes=nodes, name=f"mlx_bf16_{op_type}", opset_imports=opset_imports
+    )
+    return ir.to_proto(ir.Model(graph, ir_version=11)).SerializeToString()
+
+
+def _np_softmax(x: np.ndarray) -> np.ndarray:
+    e = np.exp(x - x.max(axis=-1, keepdims=True))
+    return e / e.sum(axis=-1, keepdims=True)
+
+
+def _np_rms_norm(x: np.ndarray, scale: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    return x / np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + eps) * scale
 
 
 def rotary_caches(max_seq: int, rotary_dim: int) -> tuple[np.ndarray, np.ndarray]:
@@ -268,6 +358,145 @@ def skip_simplified_layernorm_case(name: str, *, rows: int, hidden: int) -> None
     )
 
 
+def dtype_generic_checks() -> None:
+    """Run the dtype-generic ops (elementwise/activation/softmax/normalization) in fp16 AND bf16.
+
+    fp16 is compared against ORT's CPU EP (which has fp16 kernels for these ops). bf16 keeps the
+    compute inside an MLX-claimed subgraph (fp32 boundaries) and is compared against a numpy fp32
+    reference at ~1e-2 tolerance (bf16 carries ~3 significant digits).
+    """
+    rng = np.random.default_rng(7)
+    a = rng.standard_normal((2, 3)).astype(np.float32)
+    b = rng.standard_normal((3,)).astype(np.float32)
+    x = rng.standard_normal((2, 5)).astype(np.float32)
+    rms_x = rng.standard_normal((1, 4, 8)).astype(np.float32)
+    rms_g = rng.standard_normal((8,)).astype(np.float32)
+
+    # ---- fp16: MLX vs ORT CPU (fp16 kernels exist on CPU) ----
+    f16 = np.float16
+    compare(
+        "Mul fp16",
+        make_model(
+            "Mul",
+            [tensor("a", DataType.FLOAT16, [2, 3]), tensor("b", DataType.FLOAT16, [3])],
+            [tensor("out", DataType.FLOAT16, [2, 3])],
+        ),
+        {"a": a.astype(f16), "b": b.astype(f16)},
+        rtol=2e-3,
+        atol=2e-3,
+    )
+    compare(
+        "Sub fp16",
+        make_model(
+            "Sub",
+            [tensor("a", DataType.FLOAT16, [2, 3]), tensor("b", DataType.FLOAT16, [3])],
+            [tensor("out", DataType.FLOAT16, [2, 3])],
+        ),
+        {"a": a.astype(f16), "b": b.astype(f16)},
+        rtol=2e-3,
+        atol=2e-3,
+    )
+    compare(
+        "Sigmoid fp16",
+        make_model(
+            "Sigmoid",
+            [tensor("x", DataType.FLOAT16, [2, 5])],
+            [tensor("out", DataType.FLOAT16, [2, 5])],
+        ),
+        {"x": x.astype(f16)},
+        rtol=2e-3,
+        atol=2e-3,
+    )
+    compare(
+        "Softmax fp16",
+        make_model(
+            "Softmax",
+            [tensor("x", DataType.FLOAT16, [2, 5])],
+            [tensor("out", DataType.FLOAT16, [2, 5])],
+            attributes={"axis": -1},
+        ),
+        {"x": x.astype(f16)},
+        rtol=2e-3,
+        atol=2e-3,
+    )
+    compare(
+        "RMSNormalization fp16",
+        make_model(
+            "RMSNormalization",
+            [tensor("x", DataType.FLOAT16, [1, 4, 8]), tensor("scale", DataType.FLOAT16, [8])],
+            [tensor("out", DataType.FLOAT16, [1, 4, 8])],
+            attributes={"axis": -1, "epsilon": 1e-6},
+        ),
+        {"x": rms_x.astype(f16), "scale": rms_g.astype(f16)},
+        rtol=3e-3,
+        atol=3e-3,
+    )
+
+    # ---- bf16: MLX (bf16 interior) vs numpy fp32 reference ----
+    bf_rtol, bf_atol = 2e-2, 2e-2
+    compare_ref(
+        "Add bf16",
+        bf16_interior_model("Add", [("a", [2, 3]), ("b", [2, 3])], [2, 3]),
+        {"a": a, "b": a * 0.5},
+        [a + a * 0.5],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "Mul bf16",
+        bf16_interior_model("Mul", [("a", [2, 3]), ("b", [3])], [2, 3]),
+        {"a": a, "b": b},
+        [a * b],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "Sub bf16",
+        bf16_interior_model("Sub", [("a", [2, 3]), ("b", [3])], [2, 3]),
+        {"a": a, "b": b},
+        [a - b],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "Sigmoid bf16",
+        bf16_interior_model("Sigmoid", [("x", [2, 5])], [2, 5]),
+        {"x": x},
+        [1.0 / (1.0 + np.exp(-x))],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "Softmax bf16",
+        bf16_interior_model("Softmax", [("x", [2, 5])], [2, 5], attributes={"axis": -1}),
+        {"x": x},
+        [_np_softmax(x)],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "RMSNormalization bf16",
+        bf16_interior_model(
+            "RMSNormalization",
+            [("x", [1, 4, 8]), ("scale", [8])],
+            [1, 4, 8],
+            attributes={"axis": -1, "epsilon": 1e-6},
+        ),
+        {"x": rms_x, "scale": rms_g},
+        [_np_rms_norm(rms_x, rms_g)],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+    compare_ref(
+        "Cast fp32->bf16->fp32",
+        bf16_interior_model("Add", [("a", [2, 3]), ("b", [2, 3])], [2, 3]),
+        {"a": a, "b": np.zeros_like(a)},
+        [a],
+        rtol=bf_rtol,
+        atol=bf_atol,
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: mlx_op_test.py <libonnxruntime_mlx_ep.dylib>", file=sys.stderr)
@@ -410,6 +639,9 @@ def main() -> int:
 
     # --- Attention ------------------------------------------------------------------------------
     gqa_differential_checks()
+
+    # --- Per-dtype coverage: fp16 (vs ORT CPU) and bf16 (vs numpy ref) --------------------------
+    dtype_generic_checks()
 
     print("All MLX op-correctness checks passed")
     return 0

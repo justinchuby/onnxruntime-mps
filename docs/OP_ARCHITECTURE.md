@@ -11,15 +11,15 @@
 
 The op architecture is now an ONNX→MLX translator, not a hand-kernel registry.
 
-`src/ep/ep.cc` decides which ONNX nodes are claimable, asks ORT to fuse the supported partition, and compiles the partition into an MLX-oriented node-descriptor plan. `src/ep/mlx_backend.{h,cc}` executes that plan through `mlx-c`. MLX is the **only** compute path for both prefill and decode.
+`src/ep/ep.cc` decides which ONNX nodes are claimable, asks ORT to fuse the supported partition, and compiles the partition into an MLX-oriented node-descriptor plan. `src/ep/mlx_backend.cc` runs that plan through `mlx-c`, dispatching each node through a **modular, opset-aware, dtype-generic op registry** (`src/ep/op_registry.{h,cc}` + the per-family handler modules under `src/ep/ops/`). MLX is the **only** compute path for both prefill and decode.
 
-The registered EP name remains **`MetalEP`** for `onnx-genai` compatibility, but the repo, vendor string, target, and artifact are MLX-native:
+The registered EP name is **`MLXExecutionProvider`** (the name passed to `RegisterExecutionProviderLibrary` and returned by the factory/EP `GetName`). The repo, vendor string, target, and artifact are MLX-native:
 
 - Repo/vendor: `onnxruntime-mlx`
 - Target: `onnxruntime_mlx_ep`
 - Dylib: `libonnxruntime_mlx_ep.dylib`
 
-There are no active `.metal` kernels, no Metal shader registry, no `src/ops/` modular registry, and no dtype/MSL specialization scaffold.
+There are no active `.metal` kernels, no Metal shader registry, and no dtype/MSL specialization scaffold. Op translations live in the modular registry described in §2.2 — adding an op is one handler file plus one registration line.
 
 ---
 
@@ -46,7 +46,7 @@ Claimed nodes are grouped into an ORT partition for the plugin EP. The design go
 
 ### 1.4 Run
 
-`src/ep/mlx_backend.{h,cc}` materializes and executes the MLX graph via `mlx-c`. The runtime evaluates once at the fused subgraph boundary with `mlx_eval`, then writes outputs back to the ORT tensors expected by the session.
+`src/ep/mlx_backend.cc` materializes and executes the MLX graph via `mlx-c`, dispatching each node through the op registry (§2.2). The runtime evaluates once at the fused subgraph boundary with `mlx_eval`, then writes outputs back to the ORT tensors expected by the session.
 
 ### 1.5 Fallback
 
@@ -62,15 +62,15 @@ The following table is the current support contract. Do not broaden claims witho
 |---|---|---|---|---|
 | **MatMulNBits** | `com.microsoft` | int4 block quantized weights, `bits=4`, `block_size=32` | `mlx_quantized_matmul` | Packed uint8 int4 weights are repacked once to MLX affine-quant format and cached persistently on the compiled plan. |
 | **GroupQueryAttention** | `com.microsoft` | 9-input separate-QKV form; `fp32` Q/K/V/past_k/past_v/cos/sin; `int32` `seqlens_k` and `total_seq`; RoPE applied in-op | `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope` | Writes present K/V back to the same ORT ctx outputs in `[B, kv_heads, total_seq, head]` `fp32` layout. This keeps prefill→decode KV handoff layout- and position-continuous. |
-| **RMSNormalization** | `ai.onnx` | `axis=-1`, `fp32` | `mlx_fast_rms_norm` | Gamma is cached from live context data on first run. |
-| **SkipSimplifiedLayerNormalization** | `com.microsoft` | `fp32` input/skip/gamma | skip-add + `mlx_fast_rms_norm` | Implements residual add followed by RMS normalization. |
+| **RMSNormalization** | `ai.onnx` | `axis=-1`; `fp32`/`fp16`/`bf16` | `mlx_fast_rms_norm` | Gamma is cached from live context data on first run. Dtype-generic. |
+| **SkipSimplifiedLayerNormalization** | `com.microsoft` | `fp32`/`fp16`/`bf16` input/skip/gamma | skip-add + `mlx_fast_rms_norm` | Implements residual add followed by RMS normalization. Dtype-generic. |
 | **GatherBlockQuantized** | `com.microsoft` | SYMMETRIC int4 embedding only; 3-input form; `zp=8` | gather + int4 dequant | The asymmetric 4-input `zero_points` form is intentionally not claimed and falls back to CPU. MLX zero-points support is a documented follow-up. |
-| **Softmax** | `ai.onnx` | last-axis, `fp32` | `mlx_softmax` | Claimed only for the last-axis fp32 form. |
-| **Add** | `ai.onnx` | `fp32`, `fp16` | MLX elementwise add | Floating forms only. |
-| **Mul** | `ai.onnx` | floating point | MLX elementwise multiply | Floating forms only. |
-| **Sub** | `ai.onnx` | floating point, `int64` | MLX elementwise subtract | Covers supported numeric/bookkeeping forms only. |
-| **Sigmoid** | `ai.onnx` | floating point | MLX elementwise sigmoid | Standalone `SiLU`/`Swish` are not claimed. |
-| **Cast** | `ai.onnx` | `fp32`↔`fp16`, `int64`→`int32` | MLX cast | Other casts remain on CPU. |
+| **Softmax** | `ai.onnx` | last-axis; `fp32`/`fp16`/`bf16` | `mlx_softmax` | Claimed only for the last-axis form. Dtype-generic. |
+| **Add** | `ai.onnx` | `fp32`/`fp16`/`bf16` | MLX elementwise add | Floating forms only (fp32 via the residual-add predicate, fp16/bf16 via the elementwise predicate). |
+| **Mul** | `ai.onnx` | `fp32`/`fp16`/`bf16` | MLX elementwise multiply | Floating forms only. |
+| **Sub** | `ai.onnx` | `fp32`/`fp16`/`bf16`, `int64` | MLX elementwise subtract | Covers supported numeric/bookkeeping forms only. |
+| **Sigmoid** | `ai.onnx`, `com.microsoft` | `fp32`/`fp16`/`bf16` | MLX elementwise sigmoid | Standalone `SiLU`/`Swish` are not claimed. |
+| **Cast** | `ai.onnx` | float↔float among `fp32`/`fp16`/`bf16`, `int64`→`int32` | MLX cast | Other casts remain on CPU. |
 
 ### 2.1 Ops no longer claimed
 
@@ -88,6 +88,38 @@ The old hand-kernel architecture claimed or planned additional ops. The MLX tran
 | `Concat` | CPU fallback | No current MLX translator entry. |
 
 This list is intentionally explicit because older design notes and branch history may still mention these ops as hand-kernel coverage.
+
+---
+
+## 2.2 The modular op registry
+
+The translator is a **registry**, not an if-chain. Both the claim-time membership check and the run-time dispatch consult the SAME table, so a claimed op is always translatable and vice-versa.
+
+### Files
+
+| File | Role |
+|---|---|
+| `src/ep/op_registry.{h,cc}` | The `OpRegistry` singleton: the `(domain, op_type, [min_opset, max_opset]) → handler` table, `Find()`, and `Supported()`. |
+| `src/ep/mlx_engine.h` | `MlxDtypeFromOnnx()` (the dtype mapping), `Plan` (persistent MLX state), and `TranslationContext` (the object handlers use to `Resolve`/`Bind` and emit MLX ops). |
+| `src/ep/mlx_backend.cc` | The engine: `TranslationContext` method definitions, boundary eval + copy-out, and the `BuildPlan`/`RunPlan`/`DestroyPlan` API. **No op-specific logic.** |
+| `src/ep/ops/elementwise.cc` | `Add`, `Mul`, `Sub`, `Sigmoid`, `Softmax`, `Cast` handlers + `RegisterElementwiseOps`. |
+| `src/ep/ops/norm.cc` | `RMSNormalization`, `SkipSimplifiedLayerNormalization` + `RegisterNormOps`. |
+| `src/ep/ops/attention.cc` | `GroupQueryAttention` (in-op RoPE) + `RegisterAttentionOps`. |
+| `src/ep/ops/quant.cc` | `MatMulNBits`, `GatherBlockQuantized` + `RegisterQuantOps`. |
+
+Each module exposes one `RegisterXxxOps(OpRegistry&)` function; `op_registry.cc::RegisterBuiltinOps` calls them all once when the singleton is first used (explicit registration — no reliance on static-init ordering).
+
+### The registry key: `(domain, op_type, opset range)`
+
+A handler is `void(TranslationContext&, const NodeDesc&)`. It is registered under a domain (`""` = `ai.onnx`, or `com.microsoft`), an op type, and an inclusive opset range `[min_opset, max_opset]`. `kAnyOpset` (`-1`) means "unbounded on that side"; a version-insensitive or contrib op registers with `{kAnyOpset, kAnyOpset}`.
+
+The opset is threaded end-to-end: `ep.cc` reads `Ort::ConstNode::GetSinceVersion()` into `NodeDesc::since_version`, and `OpRegistry::Find` dispatches by matching the range. This is the seam that lets opset-23 and opset-24 variants of an op (e.g. `Attention`, `TensorScatter`) map to different handlers — a version-split op registers two handlers with adjacent, non-overlapping ranges (e.g. `[1, 22]` and `[23, kAnyOpset]`). `RMSNormalization` already uses a bounded range (`[23, kAnyOpset]`) as a live example.
+
+### The dtype mapping
+
+`MlxDtypeFromOnnx()` maps every ONNX tensor element type mlx-c can carry to its `mlx_dtype`: `fp32`, `fp16`, **`bf16`**, `fp64`, the signed/unsigned integer widths (`int8/16/32/64`, `uint8/16/32/64`), and `bool`. It is used in `Resolve`/`Bind`, constant materialization, the pre-eval boundary cast, and `CopyOut`, so **every tensor honors its actual dtype** rather than a hard-coded fp32.
+
+Because MLX carries the resolved dtype through its ops with no per-dtype code, the dtype-generic handlers (elementwise, activation, softmax, normalization, cast) work in fp32, fp16 **and** bf16 with a single implementation. `MatMulNBits`, `GroupQueryAttention`, and `GatherBlockQuantized` remain fp32-only (the quant repack / SDPA paths match the cpu-recipe graph); widening them is follow-up work.
 
 ---
 
@@ -112,9 +144,9 @@ The backend writes present K/V to the same ORT context outputs in `[B, kv_heads,
 
 ### 3.3 Normalization
 
-`RMSNormalization` maps to `mlx_fast_rms_norm` for `axis=-1`, `fp32` tensors.
+`RMSNormalization` maps to `mlx_fast_rms_norm` for `axis=-1`, in `fp32`/`fp16`/`bf16`.
 
-`SkipSimplifiedLayerNormalization` is translated as skip-add followed by `mlx_fast_rms_norm` for `fp32` input/skip/gamma.
+`SkipSimplifiedLayerNormalization` is translated as skip-add followed by `mlx_fast_rms_norm` for `fp32`/`fp16`/`bf16` input/skip/gamma.
 
 ### 3.4 Quantized embedding gather
 
@@ -126,12 +158,12 @@ The asymmetric four-input form with explicit `zero_points` is not claimed. It fa
 
 The translator supports the exact elementwise and cast forms listed in §2:
 
-- `Softmax`: last-axis `fp32` → `mlx_softmax`.
-- `Add`: `fp32`/`fp16`.
-- `Mul`: floating point.
-- `Sub`: floating point and `int64`.
-- `Sigmoid`: floating point.
-- `Cast`: `fp32`↔`fp16`, `int64`→`int32`.
+- `Softmax`: last-axis, `fp32`/`fp16`/`bf16` → `mlx_softmax`.
+- `Add`: `fp32`/`fp16`/`bf16`.
+- `Mul`: `fp32`/`fp16`/`bf16`.
+- `Sub`: `fp32`/`fp16`/`bf16` and `int64`.
+- `Sigmoid`: `fp32`/`fp16`/`bf16`.
+- `Cast`: float↔float among `fp32`/`fp16`/`bf16`, `int64`→`int32`.
 
 Unsupported dtype combinations fall back to CPU.
 
@@ -166,22 +198,29 @@ That means every claim must validate:
 5. Layout assumptions, especially KV-cache shape for GQA.
 6. Whether constants/initializers can be cached in the current plan.
 
+The claim predicate is additionally AND-gated by registry membership: `NodeClaimable` calls `ort_mps_mlx::Supported(domain, op_type, since_version)`, which consults the same `(domain, op, opset)` registry the run-time translator dispatches through. A node the registry has no handler for is never claimed, so "claimed" can never outrun "translatable".
+
 When in doubt, do not claim. CPU fallback is preferred to an approximate translation.
 
 ---
 
 ## 6. Adding or changing a translated op
 
-The current extension path is translator-centric:
+The extension path is registry-centric. To add a long-tail op:
 
-1. Add or tighten claim logic in `src/ep/ep.cc`.
-2. Extend the ONNX→MLX plan construction in `Compile`.
-3. Implement the MLX execution behavior in `src/ep/mlx_backend.{h,cc}`.
-4. Add op-correctness coverage in `tests/ops/mlx_op_test.py`.
-5. Add or update E2E coverage under `tests/e2e/` if the op affects decoder coherence or KV-cache behavior.
-6. Update this document's table.
+1. **Handler.** Add a `void MyOp(TranslationContext& ctx, const NodeDesc& n)` function in the appropriate `src/ep/ops/<family>.cc` module (or a new module — add its `.cc` to `CMakeLists.txt` and declare `RegisterMyFamilyOps` in `op_registry.h`, called from `RegisterBuiltinOps`). Resolve inputs with `ctx.Resolve(n.inputs[i])`, emit MLX ops via the `ctx` helpers (`Reshape`, `Transpose`, `Astype`, `Mul`, `AddA`, …) or `mlx_*` calls wrapped in `ctx.Keep(...)`, and bind results with `ctx.Bind(n.outputs[i], ...)`. Read the tensor's actual dtype through `MlxDtypeFromOnnx` — never hard-code fp32.
+2. **Register.** Add one line to that module's `RegisterXxxOps`: `registry.Register({domain, "MyOp", min_opset, max_opset, &MyOp});`. Use `kAnyOpset` for a version-insensitive op, or a bounded range for an opset-split op.
+3. **Attributes.** If the handler reads attributes not already threaded, add them to the `mnd.ints`/`mnd.floats` population in `ep.cc`'s node-build loop.
+4. **Claim predicate.** Add/extend the dtype/shape/attribute claim logic in `ep.cc` (`MarietteClaimable`/`CocoClaimable`/`AddClaimable`). The registry AND-gate means you must both add the claim predicate AND register the handler.
+5. **Tests.** Add op-correctness coverage in `tests/ops/mlx_op_test.py` (ONNX IR API). For a dtype-generic op, add fp16 (vs ORT CPU) and bf16 (bf16-interior subgraph vs a numpy reference) cases.
+6. **E2E.** Add or update `tests/e2e/` coverage if the op affects decoder coherence or KV-cache behavior.
+7. **Docs.** Update the §2 table and, if relevant, §2.2.
 
-Do not add a new `.metal` kernel, a `src/ops/` handler, or a dtype-traits/MSL specialization layer for new coverage.
+**Add a new opset variant:** register a second handler for the new range and narrow the existing registration (e.g. change `[23, kAnyOpset]` to `[23, 23]` and add `[24, kAnyOpset]`).
+
+**Add a new dtype:** if mlx-c exposes it, add the `ONNX → mlx_dtype` case to `MlxDtypeFromOnnx`, a `CopyOut` memcpy case, and widen the relevant claim predicate. Dtype-generic handlers need no change.
+
+Do not add a new `.metal` kernel or a dtype-traits/MSL specialization layer for new coverage.
 
 ---
 
@@ -189,7 +228,7 @@ Do not add a new `.metal` kernel, a `src/ops/` handler, or a dtype-traits/MSL sp
 
 | Layer | Test | Purpose |
 |---|---|---|
-| Op correctness | `tests/ops/mlx_op_test.py` / `mlx_op_tests` | Confirms each claimed translation matches ORT CPU within accepted tolerances. |
+| Op correctness | `tests/ops/mlx_op_test.py` / `mlx_op_tests` | Confirms each claimed translation matches a reference within accepted tolerances. fp32/fp16 compare against ORT CPU; bf16 keeps the compute inside an MLX-claimed subgraph (fp32 boundaries) and compares against a numpy fp32 reference (~1e-2), since ORT CPU has no bf16 kernels. |
 | E2E coherence | `tests/e2e/` / `mlx_e2e` | Confirms the plugin produces coherent model output. |
 | Memory stability | `tests/e2e/` / `mlx_leak_test` | Confirms allocator memory stays flat across bounded runs. |
 
@@ -199,8 +238,8 @@ Current post-pivot baseline:
 - `ctest`: 3/3 green (`mlx_op_tests`, `mlx_e2e`, `mlx_leak_test`).
 - Qwen2.5-0.5B emits `The capital of France is Paris`.
 - CPU token stream match for the first 14 tokens; known fp32 decode drift after that is accepted.
-- Prefill/TTFT improves from ~33 ms CPU to ~15 ms MetalEP for a 26-token prompt.
-- Prefill/TTFT improves from ~575 ms CPU to ~165 ms MetalEP for a 512-token prompt.
+- Prefill/TTFT improves from ~33 ms CPU to ~15 ms MLXExecutionProvider for a 26-token prompt.
+- Prefill/TTFT improves from ~575 ms CPU to ~165 ms MLXExecutionProvider for a 512-token prompt.
 - Warm decode is ~122–148 tok/s at short context.
 - Leak test shows flat allocator memory across bounded cycles.
 
@@ -221,7 +260,7 @@ Use only the current target/artifact names:
 - `onnxruntime_mlx_ep`
 - `libonnxruntime_mlx_ep.dylib`
 
-The registered EP name remains `MetalEP`; do not use the target/dylib rename as evidence that the runtime-facing EP name changed.
+The registered EP name is `MLXExecutionProvider`; do not use the target/dylib name as evidence that the runtime-facing EP name differs.
 
 ---
 
@@ -232,7 +271,7 @@ This document replaces the older modular-op and dtype plan. The following are hi
 - `src/kernels/*.metal` hand-written shaders for matmulnbits, GQA, norm, softmax, RoPE, elementwise, data movement, and quantized gather.
 - Metal shader compile/registry/encode machinery in `src/ep/metal_context.{h,mm}`.
 - `cmake/metal_kernels.inc.in`.
-- `src/ops/` and its op-registry scaffold.
+- `src/ops/` and its old **hand-kernel** op-registry scaffold (distinct from the current `src/ep/ops/` ONNX→MLX handler modules, which are active — see §2.2).
 - `src/dtype/dtype_traits.h` and the dtype/MSL specialization plan.
 - The old `onnxruntime_mps_ep` target and `libonnxruntime_mps_ep.dylib` artifact.
 - Transitional MLX/Metal feature flags and any hand-kernel fallback path.

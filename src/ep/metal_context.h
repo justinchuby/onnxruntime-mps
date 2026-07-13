@@ -46,6 +46,23 @@ struct RotaryEmbeddingParams {
   bool interleaved = false;
 };
 
+// Shapes/attributes for a single com.microsoft.GroupQueryAttention invocation (see
+// MetalContext::GroupQueryAttention). All tensors are fp32, batch-first.
+struct GroupQueryAttentionParams {
+  uint32_t batch_size = 0;
+  uint32_t sequence_length = 0;    // S: number of new query tokens this step
+  uint32_t num_heads = 0;          // query heads
+  uint32_t kv_num_heads = 0;       // key/value heads (grouped)
+  uint32_t head_size = 0;          // per-head dimension
+  uint32_t rotary_dim = 0;         // rotary width (<= head_size); 0 disables rotary
+  uint32_t past_seq = 0;           // seq dimension of the past K/V buffers
+  uint32_t present_seq = 0;        // seq dimension of the present K/V buffers
+  bool do_rotary = false;
+  bool interleaved = false;
+  int32_t local_window_size = -1;  // sliding-window left size; -1 => full causal
+  float scale = 0.0f;
+};
+
 // Owns id<MTLDevice>, id<MTLCommandQueue>, the compiled id<MTLLibrary> and the
 // name -> MTLComputePipelineState map. One instance per EP factory.
 class MetalContext {
@@ -120,6 +137,22 @@ class MetalContext {
 
   // Softmax (ai.onnx, axis=-1): numerically stable, over `rows` rows of width `d`.
   bool SoftmaxF32(const float* x, float* y, size_t rows, size_t d, std::string& error);
+
+  // GroupQueryAttention (com.microsoft), fp32. Computes attn_output and fills the present K/V
+  // cache from past K/V + new K/V (with rotary embedding on Q and new K when params.do_rotary).
+  // Runs as two passes (write-KV then flash attention) encoded back-to-back so the second observes
+  // the first's writes. `present_key`/`present_value` may alias `past_key`/`past_value` (the
+  // in-place share-buffer path) or be distinct buffers (the copy is then performed on-GPU).
+  // Layouts: query [B,S,num_heads*head], key/value [B,S,kv_num_heads*head],
+  // past/present K/V [B,kv_num_heads,seq,head], seqlens_k int32[B] (= total valid keys - 1 per
+  // batch), cos/sin caches [max_seq, rotary_dim/2] (may be null when do_rotary is false),
+  // output [B,S,num_heads*head].
+  bool GroupQueryAttention(const float* query, const float* key, const float* value,
+                           const float* past_key, const float* past_value,
+                           const int32_t* seqlens_k, const float* cos_cache,
+                           const float* sin_cache, float* output, float* present_key,
+                           float* present_value, const GroupQueryAttentionParams& params,
+                           std::string& error);
 
   bool Binary(BinaryOp op, ScalarType type, const void* a, size_t na, const void* b, size_t nb,
               void* output, size_t n, std::string& error);

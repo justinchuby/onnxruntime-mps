@@ -107,6 +107,14 @@ struct MarietteKernel : KernelBase {
   std::string op_type_;
   float epsilon_ = 1e-6f;
 
+  // GroupQueryAttention attributes.
+  int64_t num_heads_ = 0;
+  int64_t kv_num_heads_ = 0;
+  float scale_ = 0.0f;
+  int64_t do_rotary_ = 0;
+  int64_t rotary_interleaved_ = 0;
+  int64_t local_window_size_ = -1;
+
   // MatMulNBits constant-weight device cache (nullptr until the first Compute).
   void* b_dev_ = nullptr;
   void* scales_dev_ = nullptr;

@@ -81,6 +81,22 @@ struct ConcatSliceParams {
   uint32_t n;
 };
 
+// Device-side mirror of GqaParams in src/kernels/gqa.metal (field order/layout must match).
+struct GqaKernelParams {
+  uint32_t batch;
+  uint32_t seq_len;
+  uint32_t num_heads;
+  uint32_t kv_num_heads;
+  uint32_t head_size;
+  uint32_t rotary_dim;
+  uint32_t past_seq;
+  uint32_t present_seq;
+  uint32_t do_rotary;
+  uint32_t interleaved;
+  int32_t local_window;
+  float scale;
+};
+
 size_t ScalarSize(ScalarType type) {
   switch (type) {
     case ScalarType::Float16:
@@ -254,6 +270,7 @@ std::unique_ptr<MetalContext> MetalContext::Create(std::string& error) {
         // Mariette core-compute kernels.
         "mps_matmulnbits_f32",  "mps_rmsnorm_f32",
         "mps_skip_simplified_layernorm_f32", "mps_softmax_f32",
+        "mps_gqa_write_kv_f32", "mps_gqa_attention_f32",
     };
 
     for (const char* name : kPipelineNames) {
@@ -989,6 +1006,178 @@ bool MetalContext::SoftmaxF32(const float* x, float* y, size_t rows, size_t d, s
     MTLSize grid = MTLSizeMake(rows, 1, 1);
     MTLSize tg = MTLSizeMake(std::max<NSUInteger>(tg_width, 32), 1, 1);
     return RunPass(impl, "mps_softmax_f32", bufs, consts, grid, tg, /*by_threadgroups=*/true, error);
+  }
+}
+
+bool MetalContext::GroupQueryAttention(const float* query, const float* key, const float* value,
+                                       const float* past_key, const float* past_value,
+                                       const int32_t* seqlens_k, const float* cos_cache,
+                                       const float* sin_cache, float* output, float* present_key,
+                                       float* present_value,
+                                       const GroupQueryAttentionParams& p, std::string& error) {
+  @autoreleasepool {
+    if (p.batch_size == 0 || p.sequence_length == 0 || p.num_heads == 0 || p.kv_num_heads == 0 ||
+        p.head_size == 0) {
+      return true;
+    }
+    if (p.num_heads % p.kv_num_heads != 0) {
+      error = "GroupQueryAttention requires num_heads % kv_num_heads == 0";
+      return false;
+    }
+    Impl& impl = *impl_;
+
+    // The write-KV grid and rotary-cache wrap are sized by present_seq (= past + S), an upper bound
+    // on every position touched. We deliberately do NOT read seqlens_k on the host: in a fused batch
+    // it is a device-resident intermediate (produced by an upstream Cast) whose host shadow is stale.
+    // Per-batch validity is enforced inside the kernel, which reads seqlens_k from the device buffer.
+    if (p.present_seq == 0) {
+      return true;
+    }
+    const uint32_t total_max = p.present_seq;
+
+    const uint32_t B = p.batch_size, S = p.sequence_length, H = p.num_heads, KVH = p.kv_num_heads,
+                   HS = p.head_size;
+    const size_t q_bytes = (size_t)B * S * H * HS * sizeof(float);
+    const size_t kv_in_bytes = (size_t)B * S * KVH * HS * sizeof(float);
+    const size_t past_bytes = (size_t)B * KVH * p.past_seq * HS * sizeof(float);
+    const size_t present_bytes = (size_t)B * KVH * p.present_seq * HS * sizeof(float);
+    const size_t seqlens_bytes = (size_t)B * sizeof(int32_t);
+    // Rotary caches are [max_seq, rotary_dim/2]; positions accessed reach present_seq-1, so a wrap of
+    // present_seq rows is sufficient when the cache is host-wrapped (device-resident caches ignore it).
+    const size_t cache_bytes =
+        p.do_rotary ? (size_t)total_max * (p.rotary_dim / 2) * sizeof(float) : sizeof(float);
+
+    // A non-null placeholder for the rotary caches when rotary is disabled.
+    float dummy_cache = 0.0f;
+    const float* cos_ptr = (p.do_rotary && cos_cache) ? cos_cache : &dummy_cache;
+    const float* sin_ptr = (p.do_rotary && sin_cache) ? sin_cache : &dummy_cache;
+    // When there is no past (prefill), the past buffers are empty; pass a non-null placeholder so
+    // buffer wrapping never dereferences null (the kernel never reads past for pos >= past == 0).
+    float dummy_past = 0.0f;
+    const float* pastk_ptr = (past_bytes != 0 && past_key) ? past_key : &dummy_past;
+    const float* pastv_ptr = (past_bytes != 0 && past_value) ? past_value : &dummy_past;
+    const size_t past_wrap_bytes = past_bytes != 0 ? past_bytes : sizeof(float);
+
+    // Resolve every operand to a device buffer (LookupBuffer for device-resident tensors, else a
+    // wrapped temp). Outputs may alias their past inputs (share-buffer path) with zero copy.
+    std::vector<ResolvedBuffer> all;
+    ResolvedBuffer r_query = ResolveMC(impl, query, q_bytes, false);
+    ResolvedBuffer r_key = ResolveMC(impl, key, kv_in_bytes, false);
+    ResolvedBuffer r_value = ResolveMC(impl, value, kv_in_bytes, false);
+    ResolvedBuffer r_pastk = ResolveMC(impl, pastk_ptr, past_wrap_bytes, false);
+    ResolvedBuffer r_pastv = ResolveMC(impl, pastv_ptr, past_wrap_bytes, false);
+    ResolvedBuffer r_seqlens = ResolveMC(impl, seqlens_k, seqlens_bytes, false);
+    ResolvedBuffer r_cos = ResolveMC(impl, cos_ptr, cache_bytes, false);
+    ResolvedBuffer r_sin = ResolveMC(impl, sin_ptr, cache_bytes, false);
+    ResolvedBuffer r_out = ResolveMC(impl, output, q_bytes, true);
+    ResolvedBuffer r_presk = ResolveMC(impl, present_key, present_bytes, true);
+    ResolvedBuffer r_presv = ResolveMC(impl, present_value, present_bytes, true);
+    all = {r_query, r_key,  r_value, r_pastk, r_pastv, r_seqlens,
+           r_cos,   r_sin,  r_out,   r_presk, r_presv};
+    for (const ResolvedBuffer& rb : all) {
+      if (rb.buffer == nil) {
+        for (const ResolvedBuffer& t : all)
+          if (t.owned) [t.buffer release];
+        error = "GroupQueryAttention failed to allocate a Metal buffer";
+        return false;
+      }
+    }
+
+    auto pipe_a = impl.pipelines.find("mps_gqa_write_kv_f32");
+    auto pipe_b = impl.pipelines.find("mps_gqa_attention_f32");
+    if (pipe_a == impl.pipelines.end() || pipe_b == impl.pipelines.end()) {
+      for (const ResolvedBuffer& t : all)
+        if (t.owned) [t.buffer release];
+      error = "GroupQueryAttention pipelines unavailable";
+      return false;
+    }
+
+    // Choose the attention threadgroup width T (key-split for flash-decoding). Bounded by both the
+    // pipeline's max threads and the threadgroup memory needed: qrot[HS] + m[T] + l[T] + acc[T*HS].
+    const NSUInteger tg_mem_cap =
+        std::min<NSUInteger>([impl.device maxThreadgroupMemoryLength], 32768) - 512;
+    const NSUInteger budget_floats = tg_mem_cap / sizeof(float);
+    NSUInteger t_by_mem = budget_floats > HS ? (budget_floats - HS) / (HS + 2) : 32;
+    NSUInteger T = std::min<NSUInteger>({(NSUInteger)256, pipe_b->second.maxTotalThreadsPerThreadgroup,
+                                         t_by_mem});
+    T = (T / 32) * 32;
+    if (T < 32) T = 32;
+    const size_t shared_bytes = (HS + 2 * T + (size_t)T * HS) * sizeof(float);
+
+    const GqaKernelParams kp{B, S, H, KVH, HS, p.rotary_dim, p.past_seq, p.present_seq,
+                             p.do_rotary ? 1u : 0u, p.interleaved ? 1u : 0u, p.local_window_size,
+                             p.scale};
+
+    const bool own_command = !impl.batch_active;
+    id<MTLCommandBuffer> command = own_command ? [impl.queue commandBuffer] : impl.batch_command;
+    id<MTLComputeCommandEncoder> encoder =
+        own_command ? [command computeCommandEncoder] : impl.batch_encoder;
+    if (command == nil || encoder == nil) {
+      for (const ResolvedBuffer& t : all)
+        if (t.owned) [t.buffer release];
+      error = "GroupQueryAttention failed to create a Metal command encoder";
+      return false;
+    }
+
+    // Pass 1: write the present K/V cache (copy past + rope/append new).
+    [encoder setComputePipelineState:pipe_a->second];
+    id<MTLBuffer> write_bufs[9] = {r_key.buffer,   r_value.buffer,   r_pastk.buffer,
+                                   r_pastv.buffer, r_seqlens.buffer, r_cos.buffer,
+                                   r_sin.buffer,   r_presk.buffer,   r_presv.buffer};
+    size_t write_offs[9] = {r_key.offset,   r_value.offset,   r_pastk.offset,
+                            r_pastv.offset, r_seqlens.offset, r_cos.offset,
+                            r_sin.offset,   r_presk.offset,   r_presv.offset};
+    for (NSUInteger i = 0; i < 9; ++i) [encoder setBuffer:write_bufs[i] offset:write_offs[i] atIndex:i];
+    [encoder setBytes:&kp length:sizeof(kp) atIndex:9];
+    [encoder dispatchThreadgroups:MTLSizeMake(total_max, KVH, B)
+            threadsPerThreadgroup:MTLSizeMake(HS, 1, 1)];
+
+    // Pass 2: flash attention over the present cache. Pass 2 reads the present K/V that Pass 1 just
+    // wrote into the same encoder; make the read-after-write explicit so it holds even if the shared
+    // device-pool buffers are ever allocated hazard-untracked for the batch encoder.
+    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+    [encoder setComputePipelineState:pipe_b->second];
+    id<MTLBuffer> attn_bufs[7] = {r_query.buffer,   r_presk.buffer, r_presv.buffer, r_seqlens.buffer,
+                                  r_cos.buffer,     r_sin.buffer,   r_out.buffer};
+    size_t attn_offs[7] = {r_query.offset,   r_presk.offset, r_presv.offset, r_seqlens.offset,
+                           r_cos.offset,     r_sin.offset,   r_out.offset};
+    for (NSUInteger i = 0; i < 7; ++i) [encoder setBuffer:attn_bufs[i] offset:attn_offs[i] atIndex:i];
+    [encoder setBytes:&kp length:sizeof(kp) atIndex:7];
+    [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
+    [encoder dispatchThreadgroups:MTLSizeMake(S, H, B) threadsPerThreadgroup:MTLSizeMake(T, 1, 1)];
+
+    if (!own_command) {
+      // Batch mode: defer copy-backs and temp releases to EndBatch.
+      for (const ResolvedBuffer& rb : all) {
+        if (rb.copy_back && rb.host != nullptr && rb.bytes != 0) {
+          impl.batch_copybacks.push_back({rb.host, rb.buffer, rb.bytes});
+        }
+      }
+      for (const ResolvedBuffer& rb : all) {
+        if (rb.owned) impl.batch_temps.push_back(rb.buffer);
+      }
+      return true;
+    }
+
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    impl.commit_count++;
+    const bool failed = command.status == MTLCommandBufferStatusError;
+    if (failed) {
+      error = std::string("GroupQueryAttention command buffer failed: ") +
+              (command.error ? [[command.error localizedDescription] UTF8String] : "unknown");
+    } else {
+      for (const ResolvedBuffer& rb : all) {
+        if (rb.copy_back && rb.host != nullptr && rb.bytes != 0) {
+          memcpy(rb.host, [rb.buffer contents], rb.bytes);
+        }
+      }
+    }
+    for (const ResolvedBuffer& rb : all) {
+      if (rb.owned) [rb.buffer release];
+    }
+    return !failed;
   }
 }
 

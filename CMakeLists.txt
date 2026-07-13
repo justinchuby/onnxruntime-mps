@@ -35,7 +35,8 @@ set(ORT_MPS_METAL_KERNEL_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/data_movement.metal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/matmulnbits.metal
   ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/norm.metal
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/softmax.metal)
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/softmax.metal
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/gqa.metal)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ORT_MPS_METAL_KERNEL_FILES})
 set(METAL_KERNEL_SOURCE "")
 foreach(kernel_file IN LISTS ORT_MPS_METAL_KERNEL_FILES)

@@ -169,6 +169,187 @@ void TestSoftmax(ort_mps::MetalContext& metal) {
   }
 }
 
+// Applies half-split / interleaved rotary (ORT convention) to a single head vector at `pos`.
+void RopeRef(std::vector<float>& x, size_t pos, size_t head, size_t rotary_dim, bool interleaved,
+             const std::vector<float>& cos, const std::vector<float>& sin) {
+  const size_t half = rotary_dim / 2;
+  std::vector<float> out(x);
+  for (size_t d = 0; d < rotary_dim; ++d) {
+    size_t pair, partner;
+    float sign;
+    if (interleaved) {
+      pair = d >> 1;
+      partner = d ^ 1u;
+      sign = (d & 1u) == 0 ? -1.0f : 1.0f;
+    } else {
+      pair = d < half ? d : d - half;
+      partner = d < half ? d + half : d - half;
+      sign = d < half ? -1.0f : 1.0f;
+    }
+    const float c = cos[pos * half + pair];
+    const float s = sin[pos * half + pair];
+    out[d] = x[d] * c + sign * x[partner] * s;
+  }
+  x = out;
+  (void)head;
+}
+
+// CPU reference for com.microsoft.GroupQueryAttention (semantics verified against ORT CPU EP).
+void GqaReference(size_t B, size_t S, size_t H, size_t KVH, size_t HS, size_t past, size_t present_seq,
+                  bool do_rotary, bool interleaved, int local_window, float scale,
+                  const std::vector<float>& q, const std::vector<float>& k,
+                  const std::vector<float>& v, const std::vector<float>& past_k,
+                  const std::vector<float>& past_v, const std::vector<float>& cos,
+                  const std::vector<float>& sin, size_t rotary_dim, std::vector<float>& out,
+                  std::vector<float>& present_k, std::vector<float>& present_v) {
+  const size_t group = H / KVH;
+  present_k.assign(B * KVH * present_seq * HS, 0.0f);
+  present_v.assign(B * KVH * present_seq * HS, 0.0f);
+  out.assign(B * S * H * HS, 0.0f);
+  const size_t past_seq = past;  // reference past buffer sized exactly to `past`
+  for (size_t b = 0; b < B; ++b) {
+    const size_t total = past + S;
+    for (size_t pos = 0; pos < total; ++pos) {
+      for (size_t kh = 0; kh < KVH; ++kh) {
+        float* pk = &present_k[((b * KVH + kh) * present_seq + pos) * HS];
+        float* pv = &present_v[((b * KVH + kh) * present_seq + pos) * HS];
+        if (pos < past) {
+          const float* sk = &past_k[((b * KVH + kh) * past_seq + pos) * HS];
+          const float* sv = &past_v[((b * KVH + kh) * past_seq + pos) * HS];
+          for (size_t d = 0; d < HS; ++d) { pk[d] = sk[d]; pv[d] = sv[d]; }
+        } else {
+          const size_t i = pos - past;
+          std::vector<float> kk(k.begin() + ((b * S + i) * KVH + kh) * HS,
+                                k.begin() + ((b * S + i) * KVH + kh) * HS + HS);
+          if (do_rotary) RopeRef(kk, pos, HS, rotary_dim, interleaved, cos, sin);
+          for (size_t d = 0; d < HS; ++d) {
+            pk[d] = kk[d];
+            pv[d] = v[((b * S + i) * KVH + kh) * HS + d];
+          }
+        }
+      }
+    }
+    for (size_t i = 0; i < S; ++i) {
+      const size_t posn = past + i;
+      for (size_t h = 0; h < H; ++h) {
+        const size_t kh = h / group;
+        std::vector<float> qq(q.begin() + ((b * S + i) * H + h) * HS,
+                              q.begin() + ((b * S + i) * H + h) * HS + HS);
+        if (do_rotary) RopeRef(qq, posn, HS, rotary_dim, interleaved, cos, sin);
+        size_t lo = 0;
+        if (local_window >= 0) {
+          const long l = (long)posn - local_window + 1;
+          lo = l > 0 ? (size_t)l : 0;
+        }
+        std::vector<float> scores;
+        for (size_t j = lo; j <= posn; ++j) {
+          const float* pk = &present_k[((b * KVH + kh) * present_seq + j) * HS];
+          float s = 0.0f;
+          for (size_t d = 0; d < HS; ++d) s += qq[d] * pk[d];
+          scores.push_back(s * scale);
+        }
+        float m = -1e30f;
+        for (float s : scores) m = std::max(m, s);
+        float sum = 0.0f;
+        for (float& s : scores) { s = std::exp(s - m); sum += s; }
+        std::vector<float> acc(HS, 0.0f);
+        for (size_t idx = 0; idx < scores.size(); ++idx) {
+          const size_t j = lo + idx;
+          const float* pv = &present_v[((b * KVH + kh) * present_seq + j) * HS];
+          for (size_t d = 0; d < HS; ++d) acc[d] += scores[idx] * pv[d];
+        }
+        for (size_t d = 0; d < HS; ++d) out[((b * S + i) * H + h) * HS + d] = acc[d] / sum;
+      }
+    }
+  }
+}
+
+void TestGroupQueryAttention(ort_mps::MetalContext& metal) {
+  std::mt19937 rng(4242);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  const size_t H = 4, KVH = 2, HS = 64;
+  const size_t rotary_dim = HS;
+
+  struct Case {
+    const char* tag;
+    size_t B, S, past;
+    bool do_rotary, interleaved;
+    int local_window;
+  };
+  const Case cases[] = {
+      {"decode", 1, 1, 5, true, false, -1},
+      {"decode-norope", 1, 1, 5, false, false, -1},
+      {"decode-batch", 2, 1, 7, true, false, -1},
+      {"prefill", 1, 6, 0, true, false, -1},
+      {"prefill-interleaved", 1, 4, 0, true, true, -1},
+      {"chunked", 1, 3, 4, true, false, -1},
+      {"decode-swa", 1, 1, 10, true, false, 3},
+      {"prefill-swa", 1, 6, 0, true, false, 2},
+  };
+
+  for (const Case& c : cases) {
+    const size_t total = c.past + c.S;
+    const float scale = 1.0f / std::sqrt(static_cast<float>(HS));
+    std::vector<float> q(c.B * c.S * H * HS), k(c.B * c.S * KVH * HS), v(c.B * c.S * KVH * HS);
+    std::vector<float> past_k(c.B * KVH * c.past * HS), past_v(c.B * KVH * c.past * HS);
+    std::vector<float> cos(total * (rotary_dim / 2)), sin(total * (rotary_dim / 2));
+    for (auto& x : q) x = dist(rng);
+    for (auto& x : k) x = dist(rng);
+    for (auto& x : v) x = dist(rng);
+    for (auto& x : past_k) x = dist(rng);
+    for (auto& x : past_v) x = dist(rng);
+    for (size_t p = 0; p < total; ++p) {
+      for (size_t j = 0; j < rotary_dim / 2; ++j) {
+        const float ang = dist(rng);
+        cos[p * (rotary_dim / 2) + j] = std::cos(ang);
+        sin[p * (rotary_dim / 2) + j] = std::sin(ang);
+      }
+    }
+
+    std::vector<float> ref_out, ref_pk, ref_pv;
+    GqaReference(c.B, c.S, H, KVH, HS, c.past, total, c.do_rotary, c.interleaved, c.local_window,
+                 scale, q, k, v, past_k, past_v, cos, sin, rotary_dim, ref_out, ref_pk, ref_pv);
+
+    std::vector<float> out(c.B * c.S * H * HS, 0.0f);
+    std::vector<float> pk(c.B * KVH * total * HS, 0.0f), pv(c.B * KVH * total * HS, 0.0f);
+    std::vector<int32_t> seqlens(c.B, static_cast<int32_t>(total) - 1);
+
+    ort_mps::GroupQueryAttentionParams params;
+    params.batch_size = static_cast<uint32_t>(c.B);
+    params.sequence_length = static_cast<uint32_t>(c.S);
+    params.num_heads = static_cast<uint32_t>(H);
+    params.kv_num_heads = static_cast<uint32_t>(KVH);
+    params.head_size = static_cast<uint32_t>(HS);
+    params.rotary_dim = c.do_rotary ? static_cast<uint32_t>(rotary_dim) : 0u;
+    params.past_seq = static_cast<uint32_t>(c.past);
+    params.present_seq = static_cast<uint32_t>(total);
+    params.do_rotary = c.do_rotary;
+    params.interleaved = c.interleaved;
+    params.local_window_size = c.local_window;
+    params.scale = scale;
+
+    std::string error;
+    Require(metal.GroupQueryAttention(q.data(), k.data(), v.data(), past_k.data(), past_v.data(),
+                                      seqlens.data(), c.do_rotary ? cos.data() : nullptr,
+                                      c.do_rotary ? sin.data() : nullptr, out.data(), pk.data(),
+                                      pv.data(), params, error),
+            error);
+
+    const std::string tag = c.tag;
+    for (size_t idx = 0; idx < out.size(); ++idx) {
+      CheckNear(out[idx], ref_out[idx], 2e-3f, "GQA out " + tag);
+    }
+    for (size_t b = 0; b < c.B; ++b)
+      for (size_t kh = 0; kh < KVH; ++kh)
+        for (size_t pos = 0; pos < total; ++pos)
+          for (size_t d = 0; d < HS; ++d) {
+            const size_t o = ((b * KVH + kh) * total + pos) * HS + d;
+            CheckNear(pk[o], ref_pk[o], 2e-3f, "GQA present_key " + tag);
+            CheckNear(pv[o], ref_pv[o], 2e-3f, "GQA present_value " + tag);
+          }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -180,6 +361,7 @@ int main() {
     TestRmsNorm(*metal);
     TestSkipSimplifiedLayerNorm(*metal);
     TestSoftmax(*metal);
+    TestGroupQueryAttention(*metal);
     std::cout << "All Mariette hot-path kernel CPU-reference checks passed\n";
     return 0;
   } catch (const std::exception& ex) {

@@ -68,6 +68,188 @@ def tensor(name: str, dtype: int, shape: list[int]) -> onnx.ValueInfoProto:
     return helper.make_tensor_value_info(name, dtype, shape)
 
 
+def rotary_caches(max_seq: int, rotary_dim: int) -> tuple[np.ndarray, np.ndarray]:
+    half = rotary_dim // 2
+    inv_freq = 1.0 / (10000.0 ** (np.arange(0, half, dtype=np.float64) / half))
+    pos = np.arange(max_seq, dtype=np.float64)[:, None]
+    angles = pos * inv_freq[None, :]
+    return np.cos(angles).astype(np.float32), np.sin(angles).astype(np.float32)
+
+
+def gqa_case(
+    name: str,
+    *,
+    batch: int,
+    seq: int,
+    past: int,
+    num_heads: int,
+    kv_heads: int,
+    head: int,
+    do_rotary: int,
+    interleaved: int = 0,
+    local_window: int = -1,
+) -> None:
+    present = past + seq
+    max_seq = present + 4
+    scale = 1.0 / np.sqrt(head)
+    rng = np.random.default_rng(hash((name, seq, past)) & 0xFFFFFFFF)
+    q = rng.standard_normal((batch, seq, num_heads * head)).astype(np.float32)
+    k = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    v = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    past_k = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    past_v = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    seqlens_k = np.full((batch,), present - 1, dtype=np.int32)
+    total = np.array([present], dtype=np.int32)
+    cos, sin = rotary_caches(max_seq, head)
+
+    attrs = {
+        "num_heads": num_heads,
+        "kv_num_heads": kv_heads,
+        "scale": float(scale),
+        "do_rotary": do_rotary,
+        "rotary_interleaved": interleaved,
+    }
+    if local_window >= 0:
+        attrs["local_window_size"] = local_window
+
+    inputs = [
+        tensor("query", TensorProto.FLOAT, [batch, seq, num_heads * head]),
+        tensor("key", TensorProto.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("value", TensorProto.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("past_key", TensorProto.FLOAT, [batch, kv_heads, past, head]),
+        tensor("past_value", TensorProto.FLOAT, [batch, kv_heads, past, head]),
+        tensor("seqlens_k", TensorProto.INT32, [batch]),
+        tensor("total_sequence_length", TensorProto.INT32, [1]),
+        tensor("cos_cache", TensorProto.FLOAT, [max_seq, head // 2]),
+        tensor("sin_cache", TensorProto.FLOAT, [max_seq, head // 2]),
+    ]
+    outputs = [
+        tensor("attn_output", TensorProto.FLOAT, [batch, seq, num_heads * head]),
+        tensor("present_key", TensorProto.FLOAT, [batch, kv_heads, present, head]),
+        tensor("present_value", TensorProto.FLOAT, [batch, kv_heads, present, head]),
+    ]
+    feeds = {
+        "query": q,
+        "key": k,
+        "value": v,
+        "past_key": past_k,
+        "past_value": past_v,
+        "seqlens_k": seqlens_k,
+        "total_sequence_length": total,
+        "cos_cache": cos,
+        "sin_cache": sin,
+    }
+    compare(
+        name,
+        make_model(
+            "GroupQueryAttention",
+            inputs,
+            outputs,
+            domain="com.microsoft",
+            attributes=attrs,
+        ),
+        feeds,
+        rtol=2e-3,
+        atol=2e-3,
+    )
+
+
+def gqa_fused_case(
+    name: str,
+    *,
+    batch: int,
+    seq: int,
+    past: int,
+    num_heads: int,
+    kv_heads: int,
+    head: int,
+    do_rotary: int,
+) -> None:
+    """Force GQA to consume a device-resident intermediate: Add(query, bias) -> GQA.
+
+    In a multi-node fused subgraph the Metal EP keeps the Add output on-device and feeds it
+    straight into GQA, exercising the batched-encoder path with device-resident operands."""
+    present = past + seq
+    max_seq = present + 4
+    scale = 1.0 / np.sqrt(head)
+    rng = np.random.default_rng(hash((name, seq, past)) & 0xFFFFFFFF)
+    q = rng.standard_normal((batch, seq, num_heads * head)).astype(np.float32)
+    bias = np.zeros((batch, seq, num_heads * head), dtype=np.float32)
+    k = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    v = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    past_k = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    past_v = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    seqlens_k = np.full((batch,), present - 1, dtype=np.int32)
+    total = np.array([present], dtype=np.int32)
+    cos, sin = rotary_caches(max_seq, head)
+
+    inputs = [
+        tensor("query", TensorProto.FLOAT, [batch, seq, num_heads * head]),
+        tensor("bias", TensorProto.FLOAT, [batch, seq, num_heads * head]),
+        tensor("key", TensorProto.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("value", TensorProto.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("past_key", TensorProto.FLOAT, [batch, kv_heads, past, head]),
+        tensor("past_value", TensorProto.FLOAT, [batch, kv_heads, past, head]),
+        tensor("seqlens_k", TensorProto.INT32, [batch]),
+        tensor("total_sequence_length", TensorProto.INT32, [1]),
+        tensor("cos_cache", TensorProto.FLOAT, [max_seq, head // 2]),
+        tensor("sin_cache", TensorProto.FLOAT, [max_seq, head // 2]),
+    ]
+    outputs = [
+        tensor("attn_output", TensorProto.FLOAT, [batch, seq, num_heads * head]),
+        tensor("present_key", TensorProto.FLOAT, [batch, kv_heads, present, head]),
+        tensor("present_value", TensorProto.FLOAT, [batch, kv_heads, present, head]),
+    ]
+    add_node = helper.make_node("Add", ["query", "bias"], ["query_fused"])
+    gqa_node = helper.make_node(
+        "GroupQueryAttention",
+        ["query_fused", "key", "value", "past_key", "past_value",
+         "seqlens_k", "total_sequence_length", "cos_cache", "sin_cache"],
+        ["attn_raw", "present_key", "present_value"],
+        domain="com.microsoft",
+        num_heads=num_heads,
+        kv_num_heads=kv_heads,
+        scale=float(scale),
+        do_rotary=do_rotary,
+        rotary_interleaved=0,
+    )
+    # Consume attn_raw on-device (mirrors the model's o_proj consuming GQA output).
+    post_node = helper.make_node("Add", ["attn_raw", "bias"], ["attn_output"])
+    graph = helper.make_graph([add_node, gqa_node, post_node], f"mps_{name}", inputs, outputs)
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 24), helper.make_opsetid("com.microsoft", 1)]
+    )
+    model.ir_version = 11
+    feeds = {
+        "query": q, "bias": bias, "key": k, "value": v,
+        "past_key": past_k, "past_value": past_v,
+        "seqlens_k": seqlens_k, "total_sequence_length": total,
+        "cos_cache": cos, "sin_cache": sin,
+    }
+    compare(name, model.SerializeToString(), feeds, rtol=2e-3, atol=2e-3)
+
+
+def gqa_differential_checks() -> None:
+    common = dict(batch=1, num_heads=4, kv_heads=2, head=16)
+    gqa_case("GQA-decode", seq=1, past=5, do_rotary=1, **common)
+    gqa_case("GQA-decode-norope", seq=1, past=5, do_rotary=0, **common)
+    gqa_case("GQA-decode-batch", seq=1, past=3, do_rotary=1,
+             num_heads=4, kv_heads=2, head=16, batch=2)
+    gqa_case("GQA-prefill", seq=6, past=0, do_rotary=1, **common)
+    gqa_case("GQA-prefill-interleaved", seq=6, past=0, do_rotary=1, interleaved=1, **common)
+    gqa_case("GQA-chunked", seq=3, past=4, do_rotary=1, **common)
+    gqa_case("GQA-decode-swa", seq=1, past=6, do_rotary=1, local_window=3, **common)
+    gqa_case("GQA-prefill-swa", seq=6, past=0, do_rotary=1, local_window=3, **common)
+    # Multi-node fused: GQA consumes a device-resident intermediate (Add output).
+    gqa_fused_case("GQA-fused-decode", seq=1, past=5, do_rotary=1, **common)
+    gqa_fused_case("GQA-fused-prefill", seq=6, past=0, do_rotary=1, **common)
+    # Real-model head geometry (Qwen2.5-0.5B): num_heads=14, kv=2, head=64.
+    model_geom = dict(batch=1, num_heads=14, kv_heads=2, head=64)
+    gqa_fused_case("GQA-fused-decode-h64", seq=1, past=5, do_rotary=1, **model_geom)
+    gqa_fused_case("GQA-fused-prefill-h64", seq=26, past=0, do_rotary=1, **model_geom)
+    gqa_case("GQA-decode-h64", seq=1, past=40, do_rotary=1, **model_geom)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: ort_reference_test.py <libonnxruntime_mps_ep.dylib>", file=sys.stderr)
@@ -308,9 +490,9 @@ def main() -> int:
         atol=0,
     )
 
+    gqa_differential_checks()
+
     print("All ORT CPU-EP differential checks passed")
     return 0
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

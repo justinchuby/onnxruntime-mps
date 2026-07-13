@@ -93,6 +93,11 @@ int64_t IntAttribute(Ort::ConstNode node, const char* name, int64_t default_valu
   if (!status.IsOK() || static_cast<const OrtOpAttr*>(attr) == nullptr) {
     return default_value;
   }
+  // ORT may hand back a phantom attribute (type UNDEFINED) for names absent on the node; only
+  // trust a genuine INT attribute, otherwise fall back to the caller's default.
+  if (attr.GetType() != ORT_OP_ATTR_INT) {
+    return default_value;
+  }
   int64_t value = default_value;
   status = attr.GetValue(value);
   return status.IsOK() ? value : default_value;
@@ -102,6 +107,9 @@ float FloatAttribute(Ort::ConstNode node, const char* name, float default_value)
   Ort::ConstOpAttr attr;
   Ort::Status status = node.GetAttributeByName(name, attr);
   if (!status.IsOK() || static_cast<const OrtOpAttr*>(attr) == nullptr) {
+    return default_value;
+  }
+  if (attr.GetType() != ORT_OP_ATTR_FLOAT) {
     return default_value;
   }
   float value = default_value;
@@ -349,6 +357,29 @@ bool MarietteClaimable(Ort::ConstNode node) {
     return rank > 0 && (axis == -1 || axis == rank - 1);
   }
 
+  // GroupQueryAttention (com.microsoft): fp32 Q/K/V + past/present K/V share-buffer, rotary caches.
+  // We claim the standard separate-QKV, 9-input decode/prefill layout used by our Qwen graph.
+  if (domain == "com.microsoft" && op == "GroupQueryAttention") {
+    if (inputs.size() != 9) return false;  // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
+    // q/k/v/past_k/past_v/cos/sin are fp32; seqlens_k/total_seq are int32.
+    const int fp32_inputs[] = {0, 1, 2, 3, 4, 7, 8};
+    for (int idx : fp32_inputs) {
+      ONNXTensorElementDataType t;
+      if (!TensorInfo(inputs[idx], t) || t != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
+    }
+    ONNXTensorElementDataType st, tt;
+    if (!TensorInfo(inputs[5], st) || st != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
+    if (!TensorInfo(inputs[6], tt) || tt != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;
+    const int64_t nh = IntAttribute(node, "num_heads", 0);
+    const int64_t kvh = IntAttribute(node, "kv_num_heads", 0);
+    if (nh <= 0 || kvh <= 0 || nh % kvh != 0) return false;
+    // Unsupported (rare) variants fall back to CPU. ORT materializes schema defaults, so
+    // "disabled" surfaces as smooth_softmax == -1 (not 0); only a genuine enable (== 1) is rejected.
+    if (IntAttribute(node, "smooth_softmax", 0) == 1) return false;
+    if (IntAttribute(node, "qk_output", 0) != 0) return false;      // QK intermediate output unsupported
+    if (FloatAttribute(node, "softcap", 0.0f) != 0.0f) return false;  // attention logit soft-cap unsupported
+    return true;
+  }
   return false;
 }
 
@@ -777,6 +808,14 @@ MarietteKernel::MarietteKernel(const OrtApi& ort_api, ort_mps::MetalContext* met
                                Ort::ConstNode node)
     : KernelBase(ort_api, metal), op_type_(node.GetOperatorType()) {
   epsilon_ = FloatAttribute(node, "epsilon", 1e-6f);
+  if (op_type_ == "GroupQueryAttention") {
+    num_heads_ = IntAttribute(node, "num_heads", 0);
+    kv_num_heads_ = IntAttribute(node, "kv_num_heads", 0);
+    scale_ = FloatAttribute(node, "scale", 0.0f);
+    do_rotary_ = IntAttribute(node, "do_rotary", 0);
+    rotary_interleaved_ = IntAttribute(node, "rotary_interleaved", 0);
+    local_window_size_ = IntAttribute(node, "local_window_size", -1);
+  }
 }
 
 MarietteKernel::~MarietteKernel() {
@@ -878,6 +917,56 @@ OrtStatus* MarietteKernel::ComputeIO(KernelIO& io) {
       IOTensor& out = io.Output(0, x.shape);
       if (!metal_->SoftmaxF32(x.Data<float>(), out.MutableData<float>(), rows, d, err)) {
         return ort_api_.CreateStatus(ORT_EP_FAIL, ("MetalEP Softmax failed: " + err).c_str());
+      }
+      return nullptr;
+    }
+
+    if (op_type_ == "GroupQueryAttention") {
+      RETURN_IF(io.InputCount() != 9, ort_api_, "MetalEP GroupQueryAttention expects 9 inputs");
+      const IOTensor& q = io.Input(0);        // [B, S, num_heads*head]
+      const IOTensor& k = io.Input(1);        // [B, S, kv_num_heads*head]
+      const IOTensor& v = io.Input(2);        // [B, S, kv_num_heads*head]
+      const IOTensor& past_k = io.Input(3);   // [B, kv_num_heads, past_seq, head]
+      const IOTensor& past_v = io.Input(4);   // [B, kv_num_heads, past_seq, head]
+      const IOTensor& seqlens = io.Input(5);  // int32 [B]
+      const IOTensor& cos = io.Input(7);      // [max_seq, rotary_dim/2]
+      const IOTensor& sin = io.Input(8);      // [max_seq, rotary_dim/2]
+
+      RETURN_IF(q.shape.size() != 3 || past_k.shape.size() != 4, ort_api_,
+                "MetalEP GroupQueryAttention unexpected input ranks");
+      ort_mps::GroupQueryAttentionParams params;
+      params.batch_size = static_cast<uint32_t>(q.shape[0]);
+      params.sequence_length = static_cast<uint32_t>(q.shape[1]);
+      params.num_heads = static_cast<uint32_t>(num_heads_);
+      params.kv_num_heads = static_cast<uint32_t>(kv_num_heads_);
+      params.head_size = static_cast<uint32_t>(past_k.shape[3]);
+      params.past_seq = static_cast<uint32_t>(past_k.shape[2]);
+      params.do_rotary = do_rotary_ != 0;
+      params.interleaved = rotary_interleaved_ != 0;
+      params.local_window_size = static_cast<int32_t>(local_window_size_);
+      params.scale = scale_ != 0.0f ? scale_
+                                    : 1.0f / std::sqrt(static_cast<float>(params.head_size));
+      params.rotary_dim =
+          params.do_rotary ? static_cast<uint32_t>(cos.shape.back()) * 2u : 0u;
+
+      // present K/V share the past shape but grow to total = past + S along the seq axis.
+      std::vector<int64_t> present_shape = past_k.shape;
+      const int64_t total_seq = past_k.shape[2] + q.shape[1];
+      present_shape[2] = total_seq;
+      params.present_seq = static_cast<uint32_t>(total_seq);
+
+      IOTensor& out = io.Output(0, q.shape);
+      IOTensor& present_key = io.Output(1, present_shape);
+      IOTensor& present_value = io.Output(2, present_shape);
+
+      if (!metal_->GroupQueryAttention(
+              q.Data<float>(), k.Data<float>(), v.Data<float>(), past_k.Data<float>(),
+              past_v.Data<float>(), seqlens.Data<int32_t>(),
+              params.do_rotary ? cos.Data<float>() : nullptr,
+              params.do_rotary ? sin.Data<float>() : nullptr, out.MutableData<float>(),
+              present_key.MutableData<float>(), present_value.MutableData<float>(), params, err)) {
+        return ort_api_.CreateStatus(ORT_EP_FAIL,
+                                     ("MetalEP GroupQueryAttention failed: " + err).c_str());
       }
       return nullptr;
     }

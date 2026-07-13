@@ -34,11 +34,11 @@ class MetalEp : public OrtEp, public ApiPtrs {
   };
 
   MetalEp(MetalEpFactory& factory, const std::string& name, const Config& config,
-          ort_mps::MetalContext* metal, const OrtLogger& logger);
+          std::shared_ptr<ort_mps::MetalContext> metal, const OrtLogger& logger);
   ~MetalEp();
 
   std::unordered_map<std::string, std::unique_ptr<SubgraphPlan>>& Plans() { return plans_; }
-  ort_mps::MetalContext* Metal() const { return metal_; }
+  ort_mps::MetalContext* Metal() const { return metal_.get(); }
   const OrtLogger* Logger() const { return logger_; }
 
  private:
@@ -58,7 +58,7 @@ class MetalEp : public OrtEp, public ApiPtrs {
   MetalEpFactory& factory_;
   std::string name_;
   Config config_;
-  ort_mps::MetalContext* metal_;
+  std::shared_ptr<ort_mps::MetalContext> metal_;
   const OrtLogger* logger_;  // for MPS_LOG
   std::unordered_map<std::string, std::unique_ptr<SubgraphPlan>> plans_;
 };

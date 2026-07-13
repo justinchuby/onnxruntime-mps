@@ -64,7 +64,7 @@ MetalEpFactory::MetalEpFactory(const char* registration_name, ApiPtrs apis,
                                           OrtAllocatorType::OrtReadOnlyAllocator};
 
   const OrtMemoryDevice* device = ep_api.MemoryInfo_GetMemoryDevice(default_memory_info_);
-  data_transfer_ = std::make_unique<MetalDataTransfer>(apis, device);
+  dt_device_memory_ = device;
 }
 
 /*static*/
@@ -160,7 +160,7 @@ OrtStatus* ORT_API_CALL MetalEpFactory::CreateEpImpl(OrtEpFactory* this_ptr,
     config.claim_enabled = std::strcmp(claim, "none") != 0;
   }
 
-  auto metal_ep = std::make_unique<MetalEp>(*factory, factory->ep_name_, config, factory->metal_.get(),
+  auto metal_ep = std::make_unique<MetalEp>(*factory, factory->ep_name_, config, factory->metal_,
                                             *logger);
   *ep = metal_ep.release();
   return nullptr;
@@ -177,7 +177,7 @@ OrtStatus* ORT_API_CALL MetalEpFactory::CreateAllocatorImpl(OrtEpFactory* this_p
                                                             const OrtKeyValuePairs* /*allocator_options*/,
                                                             OrtAllocator** allocator) noexcept {
   auto* factory = static_cast<MetalEpFactory*>(this_ptr);
-  *allocator = new MetalAllocator(memory_info, factory->metal_.get());
+  *allocator = new MetalAllocator(memory_info, factory->metal_);
   return nullptr;
 }
 
@@ -191,7 +191,10 @@ void ORT_API_CALL MetalEpFactory::ReleaseAllocatorImpl(OrtEpFactory* /*this_ptr*
 OrtStatus* ORT_API_CALL MetalEpFactory::CreateDataTransferImpl(OrtEpFactory* this_ptr,
                                                                OrtDataTransferImpl** data_transfer) noexcept {
   auto* factory = static_cast<MetalEpFactory*>(this_ptr);
-  *data_transfer = factory->data_transfer_.get();
+  // ORT owns the returned instance and frees it via MetalDataTransfer::ReleaseImpl (matches the
+  // Allocator's new/Release ownership). A factory-shared singleton would be a use-after-free if the
+  // factory is torn down before ORT releases a session's DataTransfer.
+  *data_transfer = new MetalDataTransfer(*factory, factory->dt_device_memory_);
   return nullptr;
 }
 

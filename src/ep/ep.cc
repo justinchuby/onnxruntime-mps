@@ -299,13 +299,13 @@ struct SubgraphNodeComputeInfo : NodeComputeInfoBase {
 // ---------------------------------------------------------------------------
 
 MetalEp::MetalEp(MetalEpFactory& factory, const std::string& name, const Config& config,
-                 ort_mps::MetalContext* metal, const OrtLogger& logger)
+                 std::shared_ptr<ort_mps::MetalContext> metal, const OrtLogger& logger)
     : OrtEp{},
       ApiPtrs{static_cast<const ApiPtrs&>(factory)},
       factory_{factory},
       name_{name},
       config_{config},
-      metal_{metal},
+      metal_{std::move(metal)},
       logger_{&logger} {
   ort_version_supported = ORT_API_VERSION;
   GetName = GetNameImpl;

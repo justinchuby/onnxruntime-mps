@@ -63,10 +63,13 @@ class MetalEpFactory : public OrtEpFactory, public ApiPtrs {
   const std::string ep_version_;
   const OrtLogger& default_logger_;
 
-  std::unique_ptr<ort_mps::MetalContext> metal_;
+  std::shared_ptr<ort_mps::MetalContext> metal_;
 
   Ort::MemoryInfo default_memory_info_{nullptr};
   Ort::MemoryInfo readonly_memory_info_{nullptr};
 
-  std::unique_ptr<MetalDataTransfer> data_transfer_;
+  // Memory device the DataTransfer copies for. DataTransfer instances are owned by ORT (created per
+  // request in CreateDataTransferImpl, freed in MetalDataTransfer::ReleaseImpl) — NOT by the factory
+  // — so their lifetime never outlives a freed factory (avoids a teardown use-after-free).
+  const OrtMemoryDevice* dt_device_memory_ = nullptr;
 };

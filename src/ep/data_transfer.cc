@@ -55,7 +55,9 @@ OrtStatus* ORT_API_CALL MetalDataTransfer::CopyTensorsImpl(OrtDataTransferImpl* 
 }
 
 /*static*/
-void ORT_API_CALL MetalDataTransfer::ReleaseImpl(OrtDataTransferImpl* /*this_ptr*/) noexcept {
-  // The factory owns a single shared MetalDataTransfer instance and frees it, so the
-  // per-use Release from ORT's plugin_data_transfer wrapper is a no-op here.
+void ORT_API_CALL MetalDataTransfer::ReleaseImpl(OrtDataTransferImpl* this_ptr) noexcept {
+  // ORT owns each instance handed out by CreateDataTransferImpl; free it here (mirrors
+  // ReleaseAllocatorImpl). OrtDataTransferImpl is MetalDataTransfer's first base, so the downcast is
+  // offset-0 and safe.
+  delete static_cast<MetalDataTransfer*>(this_ptr);
 }

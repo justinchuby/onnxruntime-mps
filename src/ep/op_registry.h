@@ -84,5 +84,9 @@ void RegisterElementwiseOps(OpRegistry& registry);
 void RegisterNormOps(OpRegistry& registry);
 void RegisterAttentionOps(OpRegistry& registry);
 void RegisterQuantOps(OpRegistry& registry);
+void RegisterMathOps(OpRegistry& registry);
+void RegisterShapeOps(OpRegistry& registry);
+void RegisterReductionOps(OpRegistry& registry);
+void RegisterNormExtOps(OpRegistry& registry);
 
 }  // namespace ort_mps_mlx

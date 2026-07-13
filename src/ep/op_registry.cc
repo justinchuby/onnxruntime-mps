@@ -16,6 +16,10 @@ void RegisterBuiltinOps(OpRegistry& registry) {
   RegisterNormOps(registry);
   RegisterAttentionOps(registry);
   RegisterQuantOps(registry);
+  RegisterMathOps(registry);
+  RegisterShapeOps(registry);
+  RegisterReductionOps(registry);
+  RegisterNormExtOps(registry);
 }
 
 }  // namespace

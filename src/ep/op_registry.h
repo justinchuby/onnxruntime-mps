@@ -100,5 +100,7 @@ void RegisterShape2Ops(OpRegistry& registry);
 void RegisterNormPoolOps(OpRegistry& registry);
 void RegisterQuantizeOps(OpRegistry& registry);
 void RegisterRandomMiscOps(OpRegistry& registry);
+void RegisterSignalOps(OpRegistry& registry);
+void RegisterVision2Ops(OpRegistry& registry);
 
 }  // namespace ort_mlx

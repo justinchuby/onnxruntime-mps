@@ -32,6 +32,8 @@ void RegisterBuiltinOps(OpRegistry& registry) {
   RegisterNormPoolOps(registry);
   RegisterQuantizeOps(registry);
   RegisterRandomMiscOps(registry);
+  RegisterSignalOps(registry);
+  RegisterVision2Ops(registry);
 }
 
 }  // namespace

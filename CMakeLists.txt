@@ -72,6 +72,8 @@ add_library(onnxruntime_mlx_ep SHARED
   src/ep/ops/normpool.cc
   src/ep/ops/quantize.cc
   src/ep/ops/randommisc.cc
+  src/ep/ops/signal.cc
+  src/ep/ops/vision2.cc
   src/ep/data_transfer.cc
   src/ep/metal_context.mm)
 

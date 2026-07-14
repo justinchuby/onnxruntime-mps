@@ -1,7 +1,7 @@
 [package]
 name = "onnxruntime-mlx-ep"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 description = "Rust spike: MLX-native ORT plugin EP (bind mlx-c directly, no mlx-rs)"
 
 [lib]
@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 onnx-runtime-tracer = { path = "../../onnx-genai/crates/onnx-runtime-tracer", default-features = false }
 
 [build-dependencies]
-bindgen = "0.70"
+bindgen = "0.72"
 
 [profile.release]
 panic = "abort"

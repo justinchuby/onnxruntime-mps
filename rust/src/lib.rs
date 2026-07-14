@@ -16,7 +16,7 @@ mod registry;
 mod sys;
 mod trace;
 
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 use std::ptr;
 
 use factory::MlxEpFactory;
@@ -27,7 +27,7 @@ use sys::ort;
 ///
 /// # Safety
 /// Called by ORT with valid ABI pointers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn CreateEpFactories(
     registration_name: *const c_char,
     ort_api_base: *const ort::OrtApiBase,
@@ -41,21 +41,17 @@ pub unsafe extern "C" fn CreateEpFactories(
     let ort_api = get_api(factory::ORT_API_VERSION);
     if ort_api.is_null() {
         let legacy = get_api(1);
-        let msg =
-            CString::new("MLXExecutionProvider requires ONNX Runtime with ORT_API_VERSION >= 27")
-                .unwrap();
         return ((*legacy).CreateStatus.unwrap())(
             ort::OrtErrorCode_ORT_INVALID_ARGUMENT,
-            msg.as_ptr(),
+            c"MLXExecutionProvider requires ONNX Runtime with ORT_API_VERSION >= 27".as_ptr(),
         );
     }
     let ep_api = ((*ort_api).GetEpApi.unwrap())();
 
     if max_factories < 1 {
-        let msg = CString::new("MLXExecutionProvider needs room for one OrtEpFactory").unwrap();
         return ((*ort_api).CreateStatus.unwrap())(
             ort::OrtErrorCode_ORT_INVALID_ARGUMENT,
-            msg.as_ptr(),
+            c"MLXExecutionProvider needs room for one OrtEpFactory".as_ptr(),
         );
     }
 
@@ -69,7 +65,7 @@ pub unsafe extern "C" fn CreateEpFactories(
 ///
 /// # Safety
 /// `factory` must have come from `CreateEpFactories`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ReleaseEpFactory(factory: *mut ort::OrtEpFactory) -> *mut ort::OrtStatus {
     factory::release_factory(factory);
     ptr::null_mut()

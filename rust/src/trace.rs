@@ -741,7 +741,7 @@ mod gpu {
     #[allow(non_camel_case_types)]
     type SEL = *const c_void;
 
-    extern "C" {
+    unsafe extern "C" {
         fn MTLCreateSystemDefaultDevice() -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> SEL;
         fn objc_msgSend();
@@ -786,7 +786,7 @@ mod signpost {
     const OS_SIGNPOST_INTERVAL_BEGIN: u8 = 1;
     const OS_SIGNPOST_INTERVAL_END: u8 = 2;
 
-    extern "C" {
+    unsafe extern "C" {
         fn os_log_create(subsystem: *const c_char, category: *const c_char) -> OsLog;
         fn os_signpost_id_generate(log: OsLog) -> u64;
         fn _os_signpost_emit_with_name_impl(
@@ -937,7 +937,7 @@ mod ioreport {
     // IOReportIterate block return code to continue iterating.
     const K_IO_REPORT_ITER_OK: c_int = 0;
 
-    extern "C" {
+    unsafe extern "C" {
         fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     }
@@ -1026,7 +1026,7 @@ mod ioreport {
     }
     unsafe impl Sync for Block {}
 
-    extern "C" {
+    unsafe extern "C" {
         // The global-block "isa" the Objective-C runtime uses for stateless blocks.
         static _NSConcreteGlobalBlock: [*const c_void; 32];
     }

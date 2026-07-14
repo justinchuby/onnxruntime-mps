@@ -30,7 +30,7 @@ impl MlxEpFactory {
     ) -> Box<MlxEpFactory> {
         let name = unsafe {
             if registration_name.is_null() || *registration_name == 0 {
-                CString::new("MLXExecutionProvider").unwrap()
+                c"MLXExecutionProvider".to_owned()
             } else {
                 std::ffi::CStr::from_ptr(registration_name).to_owned()
             }
@@ -55,8 +55,8 @@ impl MlxEpFactory {
             ort_api,
             ep_api,
             name,
-            vendor: CString::new("onnxruntime-mlx (rust spike)").unwrap(),
-            version: CString::new("0.0.1").unwrap(),
+            vendor: c"onnxruntime-mlx".to_owned(),
+            version: c"0.1.0".to_owned(),
         })
     }
 
@@ -146,10 +146,9 @@ unsafe extern "C" fn create_ep(
     let f = &*this(p);
     *ep = ptr::null_mut();
     if num_devices != 1 {
-        let msg = CString::new("MLXExecutionProvider expects exactly one device").unwrap();
         return ((*f.ort_api).CreateStatus.unwrap())(
             ort::OrtErrorCode_ORT_INVALID_ARGUMENT,
-            msg.as_ptr(),
+            c"MLXExecutionProvider expects exactly one device".as_ptr(),
         );
     }
     let mlx_ep = MlxEp::new(f.ort_api, f.ep_api, &f.name, logger);

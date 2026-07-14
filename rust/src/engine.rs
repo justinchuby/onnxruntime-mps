@@ -873,6 +873,11 @@ impl<'a> TranslationContext<'a> {
                 if o.external {
                     if let Some(&a) = self.env.get(&o.name) {
                         let casted = self.astype(a, mlx_dtype_from_onnx(o.otype))?;
+                        // Materialise to row-major contiguous HERE (once, at the boundary) so the
+                        // flat copy_out memcpy is valid. Intermediate view ops (transpose/slice/
+                        // expand/split) therefore stay zero-copy strided views that MLX folds into
+                        // consuming kernels; only actual subgraph outputs pay a contiguous copy.
+                        let casted = self.contiguous(casted)?;
                         outs.append(casted);
                         ext.push((o.clone(), casted));
                     }

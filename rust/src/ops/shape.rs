@@ -197,8 +197,8 @@ fn transpose_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
         None => (0..rank).rev().collect(),
     };
     let t = ctx.transpose(data, &perm)?;
-    let r = ctx.contiguous(t)?;
-    ctx.bind(&n.outputs[0], r);
+    // Zero-copy strided view; materialised to contiguous only if it reaches the output boundary.
+    ctx.bind(&n.outputs[0], t);
     Ok(())
 }
 
@@ -285,7 +285,7 @@ fn expand_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError>
     } else {
         ctx.emit(|res, s| unsafe { mlx::mlx_broadcast_to(res, data, result.as_ptr(), result.len(), s) })?
     };
-    let r = ctx.contiguous(r)?;
+    // Broadcast is a zero-copy stride-0 view; contiguous is deferred to the output boundary.
     ctx.bind(&n.outputs[0], r);
     Ok(())
 }
@@ -332,7 +332,7 @@ fn slice_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> 
             s,
         )
     })?;
-    let r = ctx.contiguous(r)?;
+    // Slice is a zero-copy strided view; contiguous is deferred to the output boundary.
     ctx.bind(&n.outputs[0], r);
     Ok(())
 }
@@ -384,7 +384,7 @@ fn split_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> 
     let count = parts.size();
     for i in 0..count.min(num_out) {
         let part = ctx.keep(parts.get(i));
-        let part = ctx.contiguous(part)?;
+        // Split parts are zero-copy strided views; contiguous is deferred to the output boundary.
         ctx.bind(&n.outputs[i], part);
     }
     Ok(())

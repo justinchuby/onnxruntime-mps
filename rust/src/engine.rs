@@ -272,6 +272,16 @@ pub fn mlx_dtype_from_onnx(t: ort::ONNXTensorElementDataType) -> mlxsys::mlx_dty
 /// A translation/runtime error (mirrors the C++ `MlxError`, caught in `RunPlan`).
 pub type MlxError = String;
 
+/// Narrow an ONNX i64 dimension to MLX's 32-bit `int` shape type, erroring on
+/// overflow instead of silently wrapping (`as i32`). ONNX shape/dim values are
+/// i64; MLX's C ABI uses `const int*` for shapes, so a dimension that does not
+/// fit i32 cannot be represented — real tensors never approach this, so this is
+/// defense-in-depth against corrupt/absurd dims. Sentinels `-1` (reshape infer)
+/// and `0` (copy/allowzero) fit i32 and pass through unchanged.
+pub(crate) fn dim_i32(d: i64) -> Result<i32, MlxError> {
+    i32::try_from(d).map_err(|_| format!("MLX: dimension {d} does not fit MLX's i32 shape range"))
+}
+
 /// Human-readable MLX dtype name for trace Args (e.g. `"float32"`, `"bfloat16"`).
 pub fn dtype_name(dt: mlxsys::mlx_dtype) -> &'static str {
     #[allow(non_upper_case_globals)]
@@ -484,7 +494,7 @@ impl<'a> TranslationContext<'a> {
                     return Ok(*a);
                 }
                 let (data, shape, dtype) = self.read_ctx_input(r.ctx_index)?;
-                let ishape: Vec<i32> = shape.iter().map(|&d| d as i32).collect();
+                let ishape: Vec<i32> = shape.iter().map(|&d| dim_i32(d)).collect::<Result<_, _>>()?;
                 let arr = Array::from_data(data, &ishape, mlx_dtype_from_onnx(dtype));
                 if r.constant {
                     let raw = arr.as_raw();
@@ -504,7 +514,8 @@ impl<'a> TranslationContext<'a> {
                     .init
                     .as_ref()
                     .ok_or_else(|| format!("MLX: initializer {} has no data", r.name))?;
-                let ishape: Vec<i32> = init.shape.iter().map(|&d| d as i32).collect();
+                let ishape: Vec<i32> =
+                    init.shape.iter().map(|&d| dim_i32(d)).collect::<Result<_, _>>()?;
                 let arr = Array::from_data(init.data, &ishape, mlx_dtype_from_onnx(init.dtype));
                 let raw = arr.as_raw();
                 self.plan.cache.insert(r.name.clone(), arr);

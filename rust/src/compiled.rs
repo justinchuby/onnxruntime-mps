@@ -24,7 +24,7 @@ use std::os::raw::c_void;
 use std::panic::AssertUnwindSafe;
 
 use crate::engine::{
-    copy_out_raw, mlx_dtype_from_onnx, read_ctx_input_raw, rope_row_key, DynInput, MlxError, OutRef,
+    copy_out_raw, dim_i32, mlx_dtype_from_onnx, read_ctx_input_raw, rope_row_key, DynInput, MlxError, OutRef,
     Plan, Src, SynthRope, TracePayload, TranslationContext,
 };
 use crate::mlx::{self, Array, Closure, VectorArray};
@@ -151,7 +151,7 @@ pub fn try_compiled_decode(
         let plan = unsafe { &*plan_ptr };
         for di in &plan.compiled.dyn_inputs {
             let (data, shape, dtype) = read_ctx_input_raw(api, kctx, di.ctx_index)?;
-            let ishape: Vec<i32> = shape.iter().map(|&d| d as i32).collect();
+            let ishape: Vec<i32> = shape.iter().map(|&d| dim_i32(d)).collect::<Result<_, _>>()?;
             let arr = Array::from_data(data, &ishape, mlx_dtype_from_onnx(dtype));
             input.append(arr.as_raw());
             arena.push(arr);

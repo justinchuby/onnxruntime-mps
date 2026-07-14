@@ -9,7 +9,7 @@
 //! contiguous before the shared CopyOut memcpy. Zero-size results (Pad/Expand) are re-materialised as
 //! clean zeros arrays rather than rejected to CPU.
 
-use crate::engine::{mlx_dtype_from_onnx, MlxError, NodeDesc, Src, TranslationContext};
+use crate::engine::{dim_i32, mlx_dtype_from_onnx, MlxError, NodeDesc, Src, TranslationContext};
 use crate::mlx::{Array, VectorArray};
 use crate::registry::{
     is_int_index, is_mlx_float, is_mlx_numeric, is_movable, is_range_type, NodeView, OpRegistration,
@@ -178,12 +178,12 @@ fn reshape_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError
         .enumerate()
         .map(|(i, &d)| {
             if d == 0 && i < in_shape.len() {
-                in_shape[i] // allowzero=0: copy the input dim
+                Ok(in_shape[i]) // allowzero=0: copy the input dim
             } else {
-                d as i32
+                dim_i32(d) // preserves -1 (infer); errors on >i32 dims
             }
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let r = ctx.reshape(data, &target)?;
     ctx.bind(&n.outputs[0], r);
     Ok(())
@@ -277,7 +277,7 @@ fn expand_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError>
             incompatible = true;
             d_in.max(d_t)
         };
-        result[i] = d_out as i32;
+        result[i] = dim_i32(d_out)?;
     }
     let dt = ctx.dtype_of(data);
     let r = if incompatible {

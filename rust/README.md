@@ -147,6 +147,36 @@ ports the first wave of ops. This is no longer a single hardcoded op.
 last-axis and `Cast`). fp32 required; the copy path also handles
 fp16/bf16/int32/int64.
 
+### Normalization + attention ops (`ops/norm.rs`, `ops/attention.rs`)
+
+The transformer decode path. All claim + translate through the same registry and
+run on MLX (fp32/fp16/bf16), verified against ORT CPU by `tests/ops`:
+
+- **Normalization** — `RMSNormalization`, `LayerNormalization`,
+  `SimplifiedLayerNormalization`, `SkipLayerNormalization`,
+  `SkipSimplifiedLayerNormalization`, `GroupNormalization`, `BatchNormalization`
+  (inference form), `LpNormalization`. The last-axis forms use
+  `mlx_fast_rms_norm` / `mlx_fast_layer_norm`; the rest compose mean/var/rsqrt.
+- **Attention** — `GroupQueryAttention` (in-op RoPE + KV-cache append + causal
+  SDPA, multi-output `attn`/`present_key`/`present_value`), `Attention`
+  (ai.onnx opset 23 & 24, 3D/4D, optional attn_mask + past/present KV),
+  `MultiHeadAttention` (com.microsoft, optional projection bias),
+  `RotaryEmbedding` (ai.onnx opset 23 & com.microsoft, gather / offset / absent
+  position_ids, rotate-half + interleaved, partial rotation). SDPA maps onto
+  `mlx_fast_scaled_dot_product_attention`.
+- **Leak check** — `stress_norm_attn.py` under
+  `MallocStackLogging=1 leaks --atExit` → **0 leaks / 0 total leaked bytes**
+  (exercises the fast-norm / fast-SDPA / RoPE / multi-output present-K/V paths).
+
+Edge cases intentionally left on CPU (claim returns false), matching the C++ EP:
+attention `softcap`, the `qk_matmul_output` extra output, the opset-24
+`nonpad_kv_seqlen` input, and the `is_causal` + explicit `attn_mask` combination
+(MLX fast SDPA cannot mix a causal mode with an array mask); GQA `smooth_softmax`
+/ `qk_output`; MHA packed-QKV and every masked / past-KV form (they imply an
+interior optional gap the subgraph builder cannot consume); norm Mean/InvStdDev
+extra outputs. The compiled-decode fast-path (dynamic cos/sin slice, rotate-half
+matmul) is next-wave — the eager single-`mlx_eval` path is implemented here.
+
 ### Results
 
 - `cargo build --release` — clean.

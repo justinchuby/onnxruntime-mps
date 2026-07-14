@@ -75,6 +75,9 @@ fn register_builtin_ops(registry: &mut OpRegistry) {
     crate::ops::reduction::register(registry);
     crate::ops::shape::register(registry);
     crate::ops::matmul::register(registry);
+    // norm+attention
+    crate::ops::norm::register_norm(registry);
+    crate::ops::attention::register_attention(registry);
 }
 
 /// Run-time dispatch: find the handler for a node and translate it.
@@ -282,6 +285,60 @@ impl NodeView {
                 return default;
             }
             value
+        }
+    }
+
+    /// Read a scalar FLOAT attribute by name, or `default` when absent / of another type
+    /// (mirrors `FloatAttribute`).
+    pub fn float_attr(&self, name: &str, default: f32) -> f32 {
+        unsafe {
+            let api = self.api();
+            let cname = match std::ffi::CString::new(name) {
+                Ok(c) => c,
+                Err(_) => return default,
+            };
+            let mut attr: *const ort::OrtOpAttr = std::ptr::null();
+            let st =
+                (api.Node_GetAttributeByName.unwrap())(self.node, cname.as_ptr(), &mut attr);
+            if !st.is_null() {
+                self.release_status(st);
+                return default;
+            }
+            if attr.is_null() {
+                return default;
+            }
+            let mut atype: ort::OrtOpAttrType = 0;
+            (api.OpAttr_GetType.unwrap())(attr, &mut atype);
+            if atype != ort::OrtOpAttrType_ORT_OP_ATTR_FLOAT {
+                return default;
+            }
+            let mut value: f32 = default;
+            let mut out_len: usize = 0;
+            let st = (api.ReadOpAttr.unwrap())(
+                attr,
+                ort::OrtOpAttrType_ORT_OP_ATTR_FLOAT,
+                &mut value as *mut f32 as *mut std::os::raw::c_void,
+                std::mem::size_of::<f32>(),
+                &mut out_len,
+            );
+            if !st.is_null() {
+                self.release_status(st);
+                return default;
+            }
+            value
+        }
+    }
+
+    /// True iff output `i` is present (declared, non-null value info with a non-empty name).
+    pub fn output_present(&self, i: usize) -> bool {
+        let outs = self.outputs_raw();
+        match outs.get(i) {
+            Some(&vi) if !vi.is_null() => {
+                let mut p: *const c_char = std::ptr::null();
+                unsafe { (self.api().GetValueInfoName.unwrap())(vi, &mut p) };
+                !p.is_null() && unsafe { !std::ffi::CStr::from_ptr(p).to_bytes().is_empty() }
+            }
+            _ => false,
         }
     }
 

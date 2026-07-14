@@ -1119,11 +1119,11 @@ mod ioreport {
     };
 
     unsafe fn sym<T>(handle: *mut c_void, name: &[u8]) -> Option<T> {
-        let p = dlsym(handle, name.as_ptr() as *const c_char);
+        let p = unsafe { dlsym(handle, name.as_ptr() as *const c_char) };
         if p.is_null() {
             None
         } else {
-            Some(std::mem::transmute_copy::<*mut c_void, T>(&p))
+            Some(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&p) })
         }
     }
 

@@ -4,7 +4,7 @@
 //! "translatable" can never disagree (faithful port of `op_registry.{h,cc}`).
 
 use std::os::raw::c_char;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use crate::engine::{MlxError, NodeDesc, TranslationContext};
 use crate::sys::ort;
@@ -59,13 +59,14 @@ impl OpRegistry {
     }
 }
 
+static REGISTRY: LazyLock<OpRegistry> = LazyLock::new(|| {
+    let mut r = OpRegistry::new();
+    register_builtin_ops(&mut r);
+    r
+});
+
 fn registry() -> &'static OpRegistry {
-    static REGISTRY: OnceLock<OpRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        let mut r = OpRegistry::new();
-        register_builtin_ops(&mut r);
-        r
-    })
+    &REGISTRY
 }
 
 /// Populate the table with every built-in op module (wave-1: elementwise + math).
@@ -269,7 +270,7 @@ impl NodeView {
     #[inline]
     unsafe fn release_status(&self, st: *mut ort::OrtStatus) {
         if !st.is_null() {
-            (self.api().ReleaseStatus.unwrap())(st);
+            unsafe { (self.api().ReleaseStatus.unwrap())(st) };
         }
     }
 

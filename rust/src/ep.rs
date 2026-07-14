@@ -79,16 +79,20 @@ unsafe fn this(p: *const ort::OrtEp) -> *const MlxEp {
 }
 
 unsafe extern "C" fn get_name(p: *const ort::OrtEp) -> *const c_char {
-    (*this(p)).name.as_ptr()
+    unsafe {
+        (*this(p)).name.as_ptr()
+    }
 }
 
 unsafe extern "C" fn get_default_memory_device(
     _p: *const ort::OrtEp,
     device: *mut *const ort::OrtMemoryDevice,
 ) -> *mut ort::OrtStatus {
-    // I/O stays on the CPU allocator (unified memory); no device memory advertised.
-    *device = ptr::null();
-    ptr::null_mut()
+    unsafe {
+        // I/O stays on the CPU allocator (unified memory); no device memory advertised.
+        *device = ptr::null();
+        ptr::null_mut()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -100,121 +104,131 @@ unsafe extern "C" fn get_capability(
     graph: *const ort::OrtGraph,
     support: *mut ort::OrtEpGraphSupportInfo,
 ) -> *mut ort::OrtStatus {
-    let ep = &*this(p);
-    let api = &*ep.ort_api;
-    let ep_api = &*ep.ep_api;
+    unsafe {
+        let ep = &*this(p);
+        let api = &*ep.ort_api;
+        let ep_api = &*ep.ep_api;
 
-    let mut num: usize = 0;
-    let st = (api.Graph_GetNumNodes.unwrap())(graph, &mut num);
-    if !st.is_null() {
-        return st;
-    }
-    if num == 0 {
-        return ptr::null_mut();
-    }
-    let mut nodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num];
-    let st = (api.Graph_GetNodes.unwrap())(graph, nodes.as_mut_ptr(), num);
-    if !st.is_null() {
-        return st;
-    }
-
-    // Control-flow support: ORT partitions bottom-up, presenting a CF node's body subgraph to
-    // GetCapability BEFORE the parent graph that owns the node. If this graph is the body of a
-    // control-flow node we can translate WHOLE, decline ALL body nodes here (so ORT leaves the body
-    // intact); we then claim the CF node itself at the parent level and translate its body in Compile
-    // via Node_GetSubgraphs. If the parent is a CF op we cannot translate, fall through to normal
-    // claiming so the body ops still run on MLX. Mirrors the C++ GetCapability CF path.
-    let mut in_translatable_cf_body = false;
-    if let Some(get_parent) = api.Graph_GetParentNode {
-        let mut parent: *const ort::OrtNode = ptr::null();
-        let st = get_parent(graph, &mut parent);
-        if st.is_null() && !parent.is_null() {
-            let pview = NodeView::new(ep.ort_api, parent);
-            in_translatable_cf_body = claimable(&pview);
-        } else if !st.is_null() {
-            release_status(api, st);
-        }
-    }
-
-    // Which nodes can MLX translate exactly (registry claim predicate).
-    let supported: Vec<bool> = nodes
-        .iter()
-        .map(|&node| {
-            if in_translatable_cf_body {
-                return false;
-            }
-            let view = NodeView::new(ep.ort_api, node);
-            claimable(&view)
-        })
-        .collect();
-
-    let clusters = build_convex_clusters(api, &nodes, &supported);
-
-    let add_fuse = ep_api.EpGraphSupportInfo_AddNodesToFuse.unwrap();
-    let mut claimed = 0usize;
-    for cluster in &clusters {
-        let group: Vec<*const ort::OrtNode> = cluster.iter().map(|&i| nodes[i]).collect();
-        let mut opts: ort::OrtNodeFusionOptions = std::mem::zeroed();
-        opts.ort_version_supported = ORT_API_VERSION;
-        // ORT supplies constant initializers as runtime fused-node inputs (we read them at Run).
-        opts.drop_constant_initializers = false;
-        let st = add_fuse(support, group.as_ptr(), group.len(), &opts);
+        let mut num: usize = 0;
+        let st = (api.Graph_GetNumNodes.unwrap())(graph, &mut num);
         if !st.is_null() {
             return st;
         }
-        claimed += cluster.len();
+        if num == 0 {
+            return ptr::null_mut();
+        }
+        let mut nodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num];
+        let st = (api.Graph_GetNodes.unwrap())(graph, nodes.as_mut_ptr(), num);
+        if !st.is_null() {
+            return st;
+        }
+
+        // Control-flow support: ORT partitions bottom-up, presenting a CF node's body subgraph to
+        // GetCapability BEFORE the parent graph that owns the node. If this graph is the body of a
+        // control-flow node we can translate WHOLE, decline ALL body nodes here (so ORT leaves the body
+        // intact); we then claim the CF node itself at the parent level and translate its body in Compile
+        // via Node_GetSubgraphs. If the parent is a CF op we cannot translate, fall through to normal
+        // claiming so the body ops still run on MLX. Mirrors the C++ GetCapability CF path.
+        let mut in_translatable_cf_body = false;
+        if let Some(get_parent) = api.Graph_GetParentNode {
+            let mut parent: *const ort::OrtNode = ptr::null();
+            let st = get_parent(graph, &mut parent);
+            if st.is_null() && !parent.is_null() {
+                let pview = NodeView::new(ep.ort_api, parent);
+                in_translatable_cf_body = claimable(&pview);
+            } else if !st.is_null() {
+                release_status(api, st);
+            }
+        }
+
+        // Which nodes can MLX translate exactly (registry claim predicate).
+        let supported: Vec<bool> = nodes
+            .iter()
+            .map(|&node| {
+                if in_translatable_cf_body {
+                    return false;
+                }
+                let view = NodeView::new(ep.ort_api, node);
+                claimable(&view)
+            })
+            .collect();
+
+        let clusters = build_convex_clusters(api, &nodes, &supported);
+
+        let add_fuse = ep_api.EpGraphSupportInfo_AddNodesToFuse.unwrap();
+        let mut claimed = 0usize;
+        for cluster in &clusters {
+            let group: Vec<*const ort::OrtNode> = cluster.iter().map(|&i| nodes[i]).collect();
+            let mut opts: ort::OrtNodeFusionOptions = std::mem::zeroed();
+            opts.ort_version_supported = ORT_API_VERSION;
+            // ORT supplies constant initializers as runtime fused-node inputs (we read them at Run).
+            opts.drop_constant_initializers = false;
+            let st = add_fuse(support, group.as_ptr(), group.len(), &opts);
+            if !st.is_null() {
+                return st;
+            }
+            claimed += cluster.len();
+        }
+        eprintln!(
+            "[rust-mlx-ep] GetCapability: claimed {claimed} of {num} node(s) across {} fused subgraph(s)",
+            clusters.len()
+        );
+        ptr::null_mut()
     }
-    eprintln!(
-        "[rust-mlx-ep] GetCapability: claimed {claimed} of {num} node(s) across {} fused subgraph(s)",
-        clusters.len()
-    );
-    ptr::null_mut()
 }
 
 /// Release a non-null `OrtStatus` returned on an error / not-found path (the OrtApi allocates a
 /// status object the caller owns even for benign "not found" / "buffer too small" results).
 #[inline]
 unsafe fn release_status(api: &ort::OrtApi, st: *mut ort::OrtStatus) {
-    if !st.is_null() {
-        (api.ReleaseStatus.unwrap())(st);
+    unsafe {
+        if !st.is_null() {
+            (api.ReleaseStatus.unwrap())(st);
+        }
     }
 }
 
 /// Value-info tensor name, or "" for an omitted optional slot.
 unsafe fn value_info_name(api: &ort::OrtApi, vi: *const ort::OrtValueInfo) -> String {
-    if vi.is_null() {
-        return String::new();
+    unsafe {
+        if vi.is_null() {
+            return String::new();
+        }
+        let mut p: *const c_char = ptr::null();
+        let st = (api.GetValueInfoName.unwrap())(vi, &mut p);
+        if !st.is_null() {
+            release_status(api, st);
+            return String::new();
+        }
+        if p.is_null() {
+            return String::new();
+        }
+        CStr::from_ptr(p).to_string_lossy().into_owned()
     }
-    let mut p: *const c_char = ptr::null();
-    let st = (api.GetValueInfoName.unwrap())(vi, &mut p);
-    if !st.is_null() {
-        release_status(api, st);
-        return String::new();
-    }
-    if p.is_null() {
-        return String::new();
-    }
-    CStr::from_ptr(p).to_string_lossy().into_owned()
 }
 
 unsafe fn node_input_names(api: &ort::OrtApi, node: *const ort::OrtNode) -> Vec<String> {
-    let mut n: usize = 0;
-    (api.Node_GetNumInputs.unwrap())(node, &mut n);
-    let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
-    if n > 0 {
-        (api.Node_GetInputs.unwrap())(node, v.as_mut_ptr(), n);
+    unsafe {
+        let mut n: usize = 0;
+        (api.Node_GetNumInputs.unwrap())(node, &mut n);
+        let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
+        if n > 0 {
+            (api.Node_GetInputs.unwrap())(node, v.as_mut_ptr(), n);
+        }
+        v.iter().map(|&vi| value_info_name(api, vi)).collect()
     }
-    v.iter().map(|&vi| value_info_name(api, vi)).collect()
 }
 
 unsafe fn node_output_names(api: &ort::OrtApi, node: *const ort::OrtNode) -> Vec<String> {
-    let mut n: usize = 0;
-    (api.Node_GetNumOutputs.unwrap())(node, &mut n);
-    let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
-    if n > 0 {
-        (api.Node_GetOutputs.unwrap())(node, v.as_mut_ptr(), n);
+    unsafe {
+        let mut n: usize = 0;
+        (api.Node_GetNumOutputs.unwrap())(node, &mut n);
+        let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
+        if n > 0 {
+            (api.Node_GetOutputs.unwrap())(node, v.as_mut_ptr(), n);
+        }
+        v.iter().map(|&vi| value_info_name(api, vi)).collect()
     }
-    v.iter().map(|&vi| value_info_name(api, vi)).collect()
 }
 
 /// Groups supported nodes into maximal, convex, connected clusters. A set S is convex (a valid single
@@ -402,25 +416,27 @@ unsafe extern "C" fn compile(
     node_compute_infos: *mut *mut ort::OrtNodeComputeInfo,
     _ep_context_nodes: *mut *mut ort::OrtNode,
 ) -> *mut ort::OrtStatus {
-    let ep = &*this(p);
-    let api = &*ep.ort_api;
+    unsafe {
+        let ep = &*this(p);
+        let api = &*ep.ort_api;
 
-    for i in 0..count {
-        let graph = *graphs.add(i);
-        let fused_node = *fused_nodes.add(i);
-        match build_plan(api, graph, fused_node) {
-            Ok(plan) => {
-                let info = SubgraphComputeInfo::new(ep.ort_api, ep.stream.as_raw(), plan);
-                *node_compute_infos.add(i) = Box::into_raw(info) as *mut ort::OrtNodeComputeInfo;
-            }
-            Err(msg) => {
-                let c =
-                    CString::new(msg).unwrap_or_else(|_| CString::new("MLX compile error").unwrap());
-                return (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr());
+        for i in 0..count {
+            let graph = *graphs.add(i);
+            let fused_node = *fused_nodes.add(i);
+            match build_plan(api, graph, fused_node) {
+                Ok(plan) => {
+                    let info = SubgraphComputeInfo::new(ep.ort_api, ep.stream.as_raw(), plan);
+                    *node_compute_infos.add(i) = Box::into_raw(info) as *mut ort::OrtNodeComputeInfo;
+                }
+                Err(msg) => {
+                    let c =
+                        CString::new(msg).unwrap_or_else(|_| CString::new("MLX compile error").unwrap());
+                    return (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr());
+                }
             }
         }
+        ptr::null_mut()
     }
-    ptr::null_mut()
 }
 
 unsafe fn build_plan(
@@ -428,184 +444,188 @@ unsafe fn build_plan(
     graph: *const ort::OrtGraph,
     fused_node: *const ort::OrtNode,
 ) -> Result<Plan, String> {
-    // Fused-node input/output name -> OrtKernelContext index (the runtime I/O boundary).
-    let ctx_input_index: HashMap<String, usize> = node_input_names(api, fused_node)
-        .into_iter()
-        .enumerate()
-        .filter(|(_, n)| !n.is_empty())
-        .map(|(k, n)| (n, k))
-        .collect();
-    let ctx_output_index: HashMap<String, usize> = node_output_names(api, fused_node)
-        .into_iter()
-        .enumerate()
-        .filter(|(_, n)| !n.is_empty())
-        .map(|(k, n)| (n, k))
-        .collect();
+    unsafe {
+        // Fused-node input/output name -> OrtKernelContext index (the runtime I/O boundary).
+        let ctx_input_index: HashMap<String, usize> = node_input_names(api, fused_node)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty())
+            .map(|(k, n)| (n, k))
+            .collect();
+        let ctx_output_index: HashMap<String, usize> = node_output_names(api, fused_node)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty())
+            .map(|(k, n)| (n, k))
+            .collect();
 
-    // Constant initializers referenced by the subgraph (session-owned storage).
-    let initializers = collect_initializers(api, graph)?;
+        // Constant initializers referenced by the subgraph (session-owned storage).
+        let initializers = collect_initializers(api, graph)?;
 
-    // Subgraph nodes.
-    let mut num_nodes: usize = 0;
-    (api.Graph_GetNumNodes.unwrap())(graph, &mut num_nodes);
-    let mut snodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num_nodes];
-    if num_nodes > 0 {
-        (api.Graph_GetNodes.unwrap())(graph, snodes.as_mut_ptr(), num_nodes);
-    }
+        // Subgraph nodes.
+        let mut num_nodes: usize = 0;
+        (api.Graph_GetNumNodes.unwrap())(graph, &mut num_nodes);
+        let mut snodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num_nodes];
+        if num_nodes > 0 {
+            (api.Graph_GetNodes.unwrap())(graph, snodes.as_mut_ptr(), num_nodes);
+        }
 
-    // Producer of each intra-subgraph tensor.
-    let mut producer: HashMap<String, usize> = HashMap::new();
-    for (k, &node) in snodes.iter().enumerate() {
-        for name in node_output_names(api, node) {
-            if !name.is_empty() {
-                producer.entry(name).or_insert(k);
+        // Producer of each intra-subgraph tensor.
+        let mut producer: HashMap<String, usize> = HashMap::new();
+        for (k, &node) in snodes.iter().enumerate() {
+            for name in node_output_names(api, node) {
+                if !name.is_empty() {
+                    producer.entry(name).or_insert(k);
+                }
             }
         }
+
+        // Topological order over the subgraph.
+        let order = topo_order(api, &snodes, &producer);
+
+        let mut nodes: Vec<NodeDesc> = Vec::with_capacity(snodes.len());
+        for &idx in &order {
+            let node = snodes[idx];
+            let op_type = node_op_type(api, node);
+            let domain = node_domain(api, node);
+            let since_version = node_since_version(api, node);
+            let mut nd = NodeDesc::new(op_type, domain, since_version);
+
+            collect_attributes(api, node, &mut nd);
+
+            // Build-time span so each subgraph's op structure is visible in the trace.
+            let _op_span = crate::trace::tracer().op_span(
+                &nd.op_type,
+                node_input_names(api, node).len(),
+                node_output_names(api, node).len(),
+            );
+
+            // Inputs.
+            for name in node_input_names(api, node) {
+                let tr = if name.is_empty() {
+                    TensorRef::absent()
+                } else if producer.contains_key(&name) {
+                    TensorRef {
+                        name,
+                        source: Src::Intermediate,
+                        ctx_index: 0,
+                        constant: false,
+                        init: None,
+                    }
+                } else if let Some(&ci) = ctx_input_index.get(&name) {
+                    // A constant ctx input's compile-time init pointer goes stale after Compile; the
+                    // `constant` flag lets Resolve wrap/cache it once from live ctx data on first Run.
+                    let constant = initializers.contains_key(&name);
+                    TensorRef {
+                        name,
+                        source: Src::CtxInput,
+                        ctx_index: ci,
+                        constant,
+                        init: None,
+                    }
+                } else if let Some(init) = initializers.get(&name) {
+                    TensorRef {
+                        name,
+                        source: Src::Initializer,
+                        ctx_index: 0,
+                        constant: false,
+                        init: Some(init.clone()),
+                    }
+                } else {
+                    return Err(format!("MLX could not resolve subgraph input {name}"));
+                };
+                nd.inputs.push(tr);
+            }
+
+            // Outputs.
+            for name in node_output_names(api, node) {
+                let otype = output_element_type(api, node, &name);
+                let (external, ctx_index) = match ctx_output_index.get(&name) {
+                    Some(&ci) if !name.is_empty() => (true, ci),
+                    _ => (false, 0),
+                };
+                nd.outputs.push(OutRef {
+                    name,
+                    external,
+                    ctx_index,
+                    otype,
+                });
+            }
+
+            // Control-flow node (If/Scan/Loop): recursively capture its body subgraphs so the handler
+            // can translate them inline. Implicit body inputs bottom out at this fused node's ctx
+            // boundary (ctx_input_index) or an intra-cluster producer (an enclosing runtime
+            // intermediate); body initializers layer over the fused graph's initializers.
+            let mut has_subgraphs: usize = 0;
+            (api.Node_GetNumSubgraphs.unwrap())(node, &mut has_subgraphs);
+            if has_subgraphs > 0 {
+                let enclosing_names: HashSet<String> = producer.keys().cloned().collect();
+                nd.subgraphs =
+                    build_subgraphs(api, node, &ctx_input_index, &enclosing_names, &initializers)?;
+            }
+
+            nodes.push(nd);
+        }
+
+        Ok(Plan::new(nodes))
     }
-
-    // Topological order over the subgraph.
-    let order = topo_order(api, &snodes, &producer);
-
-    let mut nodes: Vec<NodeDesc> = Vec::with_capacity(snodes.len());
-    for &idx in &order {
-        let node = snodes[idx];
-        let op_type = node_op_type(api, node);
-        let domain = node_domain(api, node);
-        let since_version = node_since_version(api, node);
-        let mut nd = NodeDesc::new(op_type, domain, since_version);
-
-        collect_attributes(api, node, &mut nd);
-
-        // Build-time span so each subgraph's op structure is visible in the trace.
-        let _op_span = crate::trace::tracer().op_span(
-            &nd.op_type,
-            node_input_names(api, node).len(),
-            node_output_names(api, node).len(),
-        );
-
-        // Inputs.
-        for name in node_input_names(api, node) {
-            let tr = if name.is_empty() {
-                TensorRef::absent()
-            } else if producer.contains_key(&name) {
-                TensorRef {
-                    name,
-                    source: Src::Intermediate,
-                    ctx_index: 0,
-                    constant: false,
-                    init: None,
-                }
-            } else if let Some(&ci) = ctx_input_index.get(&name) {
-                // A constant ctx input's compile-time init pointer goes stale after Compile; the
-                // `constant` flag lets Resolve wrap/cache it once from live ctx data on first Run.
-                let constant = initializers.contains_key(&name);
-                TensorRef {
-                    name,
-                    source: Src::CtxInput,
-                    ctx_index: ci,
-                    constant,
-                    init: None,
-                }
-            } else if let Some(init) = initializers.get(&name) {
-                TensorRef {
-                    name,
-                    source: Src::Initializer,
-                    ctx_index: 0,
-                    constant: false,
-                    init: Some(init.clone()),
-                }
-            } else {
-                return Err(format!("MLX could not resolve subgraph input {name}"));
-            };
-            nd.inputs.push(tr);
-        }
-
-        // Outputs.
-        for name in node_output_names(api, node) {
-            let otype = output_element_type(api, node, &name);
-            let (external, ctx_index) = match ctx_output_index.get(&name) {
-                Some(&ci) if !name.is_empty() => (true, ci),
-                _ => (false, 0),
-            };
-            nd.outputs.push(OutRef {
-                name,
-                external,
-                ctx_index,
-                otype,
-            });
-        }
-
-        // Control-flow node (If/Scan/Loop): recursively capture its body subgraphs so the handler
-        // can translate them inline. Implicit body inputs bottom out at this fused node's ctx
-        // boundary (ctx_input_index) or an intra-cluster producer (an enclosing runtime
-        // intermediate); body initializers layer over the fused graph's initializers.
-        let mut has_subgraphs: usize = 0;
-        (api.Node_GetNumSubgraphs.unwrap())(node, &mut has_subgraphs);
-        if has_subgraphs > 0 {
-            let enclosing_names: HashSet<String> = producer.keys().cloned().collect();
-            nd.subgraphs =
-                build_subgraphs(api, node, &ctx_input_index, &enclosing_names, &initializers)?;
-        }
-
-        nodes.push(nd);
-    }
-
-    Ok(Plan::new(nodes))
 }
 
 unsafe fn collect_initializers(
     api: &ort::OrtApi,
     graph: *const ort::OrtGraph,
 ) -> Result<HashMap<String, InitData>, String> {
-    let mut map = HashMap::new();
-    let mut num: usize = 0;
-    (api.Graph_GetNumInitializers.unwrap())(graph, &mut num);
-    if num == 0 {
-        return Ok(map);
+    unsafe {
+        let mut map = HashMap::new();
+        let mut num: usize = 0;
+        (api.Graph_GetNumInitializers.unwrap())(graph, &mut num);
+        if num == 0 {
+            return Ok(map);
+        }
+        let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num];
+        (api.Graph_GetInitializers.unwrap())(graph, vis.as_mut_ptr(), num);
+        for &vi in &vis {
+            let name = value_info_name(api, vi);
+            if name.is_empty() {
+                continue;
+            }
+            let mut value: *const ort::OrtValue = ptr::null();
+            let st = (api.ValueInfo_GetInitializerValue.unwrap())(vi, &mut value);
+            if !st.is_null() {
+                release_status(api, st);
+                continue;
+            }
+            if value.is_null() {
+                continue;
+            }
+            let mut info: *mut ort::OrtTensorTypeAndShapeInfo = ptr::null_mut();
+            (api.GetTensorTypeAndShape.unwrap())(value, &mut info);
+            let mut nd: usize = 0;
+            (api.GetDimensionsCount.unwrap())(info, &mut nd);
+            let mut dims = vec![0i64; nd];
+            if nd > 0 {
+                (api.GetDimensions.unwrap())(info, dims.as_mut_ptr(), nd);
+            }
+            let mut etype: ort::ONNXTensorElementDataType = 0;
+            (api.GetTensorElementType.unwrap())(info, &mut etype);
+            let mut count: usize = 0;
+            (api.GetTensorShapeElementCount.unwrap())(info, &mut count);
+            (api.ReleaseTensorTypeAndShapeInfo.unwrap())(info);
+            let mut data: *const c_void = ptr::null();
+            (api.GetTensorData.unwrap())(value, &mut data);
+            map.insert(
+                name,
+                InitData {
+                    data,
+                    shape: dims,
+                    dtype: etype,
+                    count,
+                    owned: None,
+                },
+            );
+        }
+        Ok(map)
     }
-    let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num];
-    (api.Graph_GetInitializers.unwrap())(graph, vis.as_mut_ptr(), num);
-    for &vi in &vis {
-        let name = value_info_name(api, vi);
-        if name.is_empty() {
-            continue;
-        }
-        let mut value: *const ort::OrtValue = ptr::null();
-        let st = (api.ValueInfo_GetInitializerValue.unwrap())(vi, &mut value);
-        if !st.is_null() {
-            release_status(api, st);
-            continue;
-        }
-        if value.is_null() {
-            continue;
-        }
-        let mut info: *mut ort::OrtTensorTypeAndShapeInfo = ptr::null_mut();
-        (api.GetTensorTypeAndShape.unwrap())(value, &mut info);
-        let mut nd: usize = 0;
-        (api.GetDimensionsCount.unwrap())(info, &mut nd);
-        let mut dims = vec![0i64; nd];
-        if nd > 0 {
-            (api.GetDimensions.unwrap())(info, dims.as_mut_ptr(), nd);
-        }
-        let mut etype: ort::ONNXTensorElementDataType = 0;
-        (api.GetTensorElementType.unwrap())(info, &mut etype);
-        let mut count: usize = 0;
-        (api.GetTensorShapeElementCount.unwrap())(info, &mut count);
-        (api.ReleaseTensorTypeAndShapeInfo.unwrap())(info);
-        let mut data: *const c_void = ptr::null();
-        (api.GetTensorData.unwrap())(value, &mut data);
-        map.insert(
-            name,
-            InitData {
-                data,
-                shape: dims,
-                dtype: etype,
-                count,
-                owned: None,
-            },
-        );
-    }
-    Ok(map)
 }
 
 /// Element byte width for an ONNX tensor element type (0 = unsupported). Mirrors ep.cc's
@@ -652,14 +672,16 @@ unsafe fn graph_value_names(
         usize,
     ) -> *mut ort::OrtStatus,
 ) -> Vec<String> {
-    let mut num: usize = 0;
-    count_fn(graph, &mut num);
-    if num == 0 {
-        return Vec::new();
+    unsafe {
+        let mut num: usize = 0;
+        count_fn(graph, &mut num);
+        if num == 0 {
+            return Vec::new();
+        }
+        let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num];
+        get_fn(graph, vis.as_mut_ptr(), num);
+        vis.iter().map(|&vi| value_info_name(api, vi)).collect()
     }
-    let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num];
-    get_fn(graph, vis.as_mut_ptr(), num);
-    vis.iter().map(|&vi| value_info_name(api, vi)).collect()
 }
 
 /// Recursively build the `SubgraphDesc` list for a control-flow node's body subgraphs (If/Scan/Loop).
@@ -675,205 +697,207 @@ unsafe fn build_subgraphs(
     enclosing_names: &HashSet<String>,
     enclosing_inits: &HashMap<String, InitData>,
 ) -> Result<Vec<SubgraphDesc>, String> {
-    let mut num_subs: usize = 0;
-    (api.Node_GetNumSubgraphs.unwrap())(cf_node, &mut num_subs);
-    if num_subs == 0 {
-        return Ok(Vec::new());
-    }
-    let mut sub_graphs: Vec<*const ort::OrtGraph> = vec![ptr::null(); num_subs];
-    let mut attr_names: Vec<*const c_char> = vec![ptr::null(); num_subs];
-    (api.Node_GetSubgraphs.unwrap())(
-        cf_node,
-        sub_graphs.as_mut_ptr(),
-        num_subs,
-        attr_names.as_mut_ptr(),
-    );
-
-    let mut out: Vec<SubgraphDesc> = Vec::with_capacity(num_subs);
-    for si in 0..num_subs {
-        let body = sub_graphs[si];
-        let attr_name = if attr_names[si].is_null() {
-            String::new()
-        } else {
-            CStr::from_ptr(attr_names[si]).to_string_lossy().into_owned()
-        };
-
-        let input_names = graph_value_names(
-            api,
-            body,
-            api.Graph_GetNumInputs.unwrap(),
-            api.Graph_GetInputs.unwrap(),
-        );
-        let output_names = graph_value_names(
-            api,
-            body,
-            api.Graph_GetNumOutputs.unwrap(),
-            api.Graph_GetOutputs.unwrap(),
+    unsafe {
+        let mut num_subs: usize = 0;
+        (api.Node_GetNumSubgraphs.unwrap())(cf_node, &mut num_subs);
+        if num_subs == 0 {
+            return Ok(Vec::new());
+        }
+        let mut sub_graphs: Vec<*const ort::OrtGraph> = vec![ptr::null(); num_subs];
+        let mut attr_names: Vec<*const c_char> = vec![ptr::null(); num_subs];
+        (api.Node_GetSubgraphs.unwrap())(
+            cf_node,
+            sub_graphs.as_mut_ptr(),
+            num_subs,
+            attr_names.as_mut_ptr(),
         );
 
-        // Body initializers layered over the enclosing ones (a body may shadow an outer name). Bytes
-        // are COPIED into owned storage — the body graph handle is released when this walk returns.
-        let mut inits: HashMap<String, InitData> = enclosing_inits.clone();
-        let mut num_init: usize = 0;
-        (api.Graph_GetNumInitializers.unwrap())(body, &mut num_init);
-        if num_init > 0 {
-            let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num_init];
-            (api.Graph_GetInitializers.unwrap())(body, vis.as_mut_ptr(), num_init);
-            for &vi in &vis {
-                let name = value_info_name(api, vi);
-                if name.is_empty() {
-                    continue;
-                }
-                let mut value: *const ort::OrtValue = ptr::null();
-                let st = (api.ValueInfo_GetInitializerValue.unwrap())(vi, &mut value);
-                if !st.is_null() {
-                    release_status(api, st);
-                    continue;
-                }
-                if value.is_null() {
-                    continue;
-                }
-                let mut info: *mut ort::OrtTensorTypeAndShapeInfo = ptr::null_mut();
-                (api.GetTensorTypeAndShape.unwrap())(value, &mut info);
-                let mut ndims: usize = 0;
-                (api.GetDimensionsCount.unwrap())(info, &mut ndims);
-                let mut dims = vec![0i64; ndims];
-                if ndims > 0 {
-                    (api.GetDimensions.unwrap())(info, dims.as_mut_ptr(), ndims);
-                }
-                let mut etype: ort::ONNXTensorElementDataType = 0;
-                (api.GetTensorElementType.unwrap())(info, &mut etype);
-                let mut count: usize = 0;
-                (api.GetTensorShapeElementCount.unwrap())(info, &mut count);
-                (api.ReleaseTensorTypeAndShapeInfo.unwrap())(info);
-                let width = element_byte_size(etype);
-                let mut raw: *const c_void = ptr::null();
-                (api.GetTensorData.unwrap())(value, &mut raw);
-                if width == 0 || raw.is_null() {
-                    continue;
-                }
-                let nbytes = count * width;
-                let owned: std::sync::Arc<Vec<u8>> = std::sync::Arc::new(
-                    std::slice::from_raw_parts(raw as *const u8, nbytes).to_vec(),
-                );
-                let data = owned.as_ptr() as *const c_void;
-                inits.insert(
-                    name,
-                    InitData {
-                        data,
-                        shape: dims,
-                        dtype: etype,
-                        count,
-                        owned: Some(owned),
-                    },
-                );
-            }
-        }
+        let mut out: Vec<SubgraphDesc> = Vec::with_capacity(num_subs);
+        for si in 0..num_subs {
+            let body = sub_graphs[si];
+            let attr_name = if attr_names[si].is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(attr_names[si]).to_string_lossy().into_owned()
+            };
 
-        // Body nodes + producer/formal sets.
-        let mut num_nodes: usize = 0;
-        (api.Graph_GetNumNodes.unwrap())(body, &mut num_nodes);
-        let mut bnodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num_nodes];
-        if num_nodes > 0 {
-            (api.Graph_GetNodes.unwrap())(body, bnodes.as_mut_ptr(), num_nodes);
-        }
-        let mut producer: HashMap<String, usize> = HashMap::new();
-        for (k, &bn) in bnodes.iter().enumerate() {
-            for name in node_output_names(api, bn) {
-                if !name.is_empty() {
-                    producer.entry(name).or_insert(k);
-                }
-            }
-        }
-        let formal: HashSet<String> = input_names.iter().filter(|n| !n.is_empty()).cloned().collect();
-
-        // Names visible to a NESTED control-flow node inside this body: enclosing ∪ formal ∪ producers.
-        let mut child_enclosing = enclosing_names.clone();
-        child_enclosing.extend(formal.iter().cloned());
-        child_enclosing.extend(producer.keys().cloned());
-
-        let order = topo_order(api, &bnodes, &producer);
-
-        let mut nodes: Vec<NodeDesc> = Vec::with_capacity(bnodes.len());
-        for &idx in &order {
-            let node = bnodes[idx];
-            let mut mnd = NodeDesc::new(
-                node_op_type(api, node),
-                node_domain(api, node),
-                node_since_version(api, node),
+            let input_names = graph_value_names(
+                api,
+                body,
+                api.Graph_GetNumInputs.unwrap(),
+                api.Graph_GetInputs.unwrap(),
             );
-            collect_attributes(api, node, &mut mnd);
+            let output_names = graph_value_names(
+                api,
+                body,
+                api.Graph_GetNumOutputs.unwrap(),
+                api.Graph_GetOutputs.unwrap(),
+            );
 
-            for name in node_input_names(api, node) {
-                let tr = if name.is_empty() {
-                    TensorRef::absent()
-                } else if producer.contains_key(&name) || formal.contains(&name) {
-                    TensorRef {
-                        name,
-                        source: Src::Intermediate,
-                        ctx_index: 0,
-                        constant: false,
-                        init: None,
+            // Body initializers layered over the enclosing ones (a body may shadow an outer name). Bytes
+            // are COPIED into owned storage — the body graph handle is released when this walk returns.
+            let mut inits: HashMap<String, InitData> = enclosing_inits.clone();
+            let mut num_init: usize = 0;
+            (api.Graph_GetNumInitializers.unwrap())(body, &mut num_init);
+            if num_init > 0 {
+                let mut vis: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); num_init];
+                (api.Graph_GetInitializers.unwrap())(body, vis.as_mut_ptr(), num_init);
+                for &vi in &vis {
+                    let name = value_info_name(api, vi);
+                    if name.is_empty() {
+                        continue;
                     }
-                } else if let Some(init) = inits.get(&name) {
-                    TensorRef {
-                        name,
-                        source: Src::Initializer,
-                        ctx_index: 0,
-                        constant: false,
-                        init: Some(init.clone()),
+                    let mut value: *const ort::OrtValue = ptr::null();
+                    let st = (api.ValueInfo_GetInitializerValue.unwrap())(vi, &mut value);
+                    if !st.is_null() {
+                        release_status(api, st);
+                        continue;
                     }
-                } else if let Some(&ci) = ctx_input_index.get(&name) {
-                    TensorRef {
-                        name,
-                        source: Src::CtxInput,
-                        ctx_index: ci,
-                        constant: false,
-                        init: None,
+                    if value.is_null() {
+                        continue;
                     }
-                } else if enclosing_names.contains(&name) {
-                    TensorRef {
-                        name,
-                        source: Src::Intermediate,
-                        ctx_index: 0,
-                        constant: false,
-                        init: None,
+                    let mut info: *mut ort::OrtTensorTypeAndShapeInfo = ptr::null_mut();
+                    (api.GetTensorTypeAndShape.unwrap())(value, &mut info);
+                    let mut ndims: usize = 0;
+                    (api.GetDimensionsCount.unwrap())(info, &mut ndims);
+                    let mut dims = vec![0i64; ndims];
+                    if ndims > 0 {
+                        (api.GetDimensions.unwrap())(info, dims.as_mut_ptr(), ndims);
                     }
-                } else {
-                    return Err(format!("MLX could not resolve control-flow body input {name}"));
-                };
-                mnd.inputs.push(tr);
+                    let mut etype: ort::ONNXTensorElementDataType = 0;
+                    (api.GetTensorElementType.unwrap())(info, &mut etype);
+                    let mut count: usize = 0;
+                    (api.GetTensorShapeElementCount.unwrap())(info, &mut count);
+                    (api.ReleaseTensorTypeAndShapeInfo.unwrap())(info);
+                    let width = element_byte_size(etype);
+                    let mut raw: *const c_void = ptr::null();
+                    (api.GetTensorData.unwrap())(value, &mut raw);
+                    if width == 0 || raw.is_null() {
+                        continue;
+                    }
+                    let nbytes = count * width;
+                    let owned: std::sync::Arc<Vec<u8>> = std::sync::Arc::new(
+                        std::slice::from_raw_parts(raw as *const u8, nbytes).to_vec(),
+                    );
+                    let data = owned.as_ptr() as *const c_void;
+                    inits.insert(
+                        name,
+                        InitData {
+                            data,
+                            shape: dims,
+                            dtype: etype,
+                            count,
+                            owned: Some(owned),
+                        },
+                    );
+                }
             }
 
-            for name in node_output_names(api, node) {
-                let otype = output_element_type(api, node, &name);
-                // Body outputs are never external ctx outputs.
-                mnd.outputs.push(OutRef {
-                    name,
-                    external: false,
-                    ctx_index: 0,
-                    otype,
-                });
+            // Body nodes + producer/formal sets.
+            let mut num_nodes: usize = 0;
+            (api.Graph_GetNumNodes.unwrap())(body, &mut num_nodes);
+            let mut bnodes: Vec<*const ort::OrtNode> = vec![ptr::null(); num_nodes];
+            if num_nodes > 0 {
+                (api.Graph_GetNodes.unwrap())(body, bnodes.as_mut_ptr(), num_nodes);
+            }
+            let mut producer: HashMap<String, usize> = HashMap::new();
+            for (k, &bn) in bnodes.iter().enumerate() {
+                for name in node_output_names(api, bn) {
+                    if !name.is_empty() {
+                        producer.entry(name).or_insert(k);
+                    }
+                }
+            }
+            let formal: HashSet<String> = input_names.iter().filter(|n| !n.is_empty()).cloned().collect();
+
+            // Names visible to a NESTED control-flow node inside this body: enclosing ∪ formal ∪ producers.
+            let mut child_enclosing = enclosing_names.clone();
+            child_enclosing.extend(formal.iter().cloned());
+            child_enclosing.extend(producer.keys().cloned());
+
+            let order = topo_order(api, &bnodes, &producer);
+
+            let mut nodes: Vec<NodeDesc> = Vec::with_capacity(bnodes.len());
+            for &idx in &order {
+                let node = bnodes[idx];
+                let mut mnd = NodeDesc::new(
+                    node_op_type(api, node),
+                    node_domain(api, node),
+                    node_since_version(api, node),
+                );
+                collect_attributes(api, node, &mut mnd);
+
+                for name in node_input_names(api, node) {
+                    let tr = if name.is_empty() {
+                        TensorRef::absent()
+                    } else if producer.contains_key(&name) || formal.contains(&name) {
+                        TensorRef {
+                            name,
+                            source: Src::Intermediate,
+                            ctx_index: 0,
+                            constant: false,
+                            init: None,
+                        }
+                    } else if let Some(init) = inits.get(&name) {
+                        TensorRef {
+                            name,
+                            source: Src::Initializer,
+                            ctx_index: 0,
+                            constant: false,
+                            init: Some(init.clone()),
+                        }
+                    } else if let Some(&ci) = ctx_input_index.get(&name) {
+                        TensorRef {
+                            name,
+                            source: Src::CtxInput,
+                            ctx_index: ci,
+                            constant: false,
+                            init: None,
+                        }
+                    } else if enclosing_names.contains(&name) {
+                        TensorRef {
+                            name,
+                            source: Src::Intermediate,
+                            ctx_index: 0,
+                            constant: false,
+                            init: None,
+                        }
+                    } else {
+                        return Err(format!("MLX could not resolve control-flow body input {name}"));
+                    };
+                    mnd.inputs.push(tr);
+                }
+
+                for name in node_output_names(api, node) {
+                    let otype = output_element_type(api, node, &name);
+                    // Body outputs are never external ctx outputs.
+                    mnd.outputs.push(OutRef {
+                        name,
+                        external: false,
+                        ctx_index: 0,
+                        otype,
+                    });
+                }
+
+                let mut nsub: usize = 0;
+                (api.Node_GetNumSubgraphs.unwrap())(node, &mut nsub);
+                if nsub > 0 {
+                    mnd.subgraphs =
+                        build_subgraphs(api, node, ctx_input_index, &child_enclosing, &inits)?;
+                }
+
+                nodes.push(mnd);
             }
 
-            let mut nsub: usize = 0;
-            (api.Node_GetNumSubgraphs.unwrap())(node, &mut nsub);
-            if nsub > 0 {
-                mnd.subgraphs =
-                    build_subgraphs(api, node, ctx_input_index, &child_enclosing, &inits)?;
-            }
-
-            nodes.push(mnd);
+            out.push(SubgraphDesc {
+                attr_name,
+                input_names,
+                output_names,
+                nodes,
+            });
         }
-
-        out.push(SubgraphDesc {
-            attr_name,
-            input_names,
-            output_names,
-            nodes,
-        });
+        Ok(out)
     }
-    Ok(out)
 }
 
 unsafe fn topo_order(
@@ -881,64 +905,72 @@ unsafe fn topo_order(
     snodes: &[*const ort::OrtNode],
     producer: &HashMap<String, usize>,
 ) -> Vec<usize> {
-    let n = snodes.len();
-    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut indeg: Vec<usize> = vec![0; n];
-    for j in 0..n {
-        let mut seen: HashSet<usize> = HashSet::new();
-        for name in node_input_names(api, snodes[j]) {
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(&i) = producer.get(&name) {
-                if i != j && seen.insert(i) {
-                    succ[i].push(j);
-                    indeg[j] += 1;
+    unsafe {
+        let n = snodes.len();
+        let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut indeg: Vec<usize> = vec![0; n];
+        for j in 0..n {
+            let mut seen: HashSet<usize> = HashSet::new();
+            for name in node_input_names(api, snodes[j]) {
+                if name.is_empty() {
+                    continue;
+                }
+                if let Some(&i) = producer.get(&name) {
+                    if i != j && seen.insert(i) {
+                        succ[i].push(j);
+                        indeg[j] += 1;
+                    }
                 }
             }
         }
-    }
-    let mut stack: Vec<usize> = (0..n).filter(|&k| indeg[k] == 0).collect();
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    while let Some(u) = stack.pop() {
-        order.push(u);
-        for &v in &succ[u] {
-            indeg[v] -= 1;
-            if indeg[v] == 0 {
-                stack.push(v);
+        let mut stack: Vec<usize> = (0..n).filter(|&k| indeg[k] == 0).collect();
+        let mut order: Vec<usize> = Vec::with_capacity(n);
+        while let Some(u) = stack.pop() {
+            order.push(u);
+            for &v in &succ[u] {
+                indeg[v] -= 1;
+                if indeg[v] == 0 {
+                    stack.push(v);
+                }
             }
         }
+        if order.len() != n {
+            order = (0..n).collect();
+        }
+        order
     }
-    if order.len() != n {
-        order = (0..n).collect();
-    }
-    order
 }
 
 unsafe fn node_op_type(api: &ort::OrtApi, node: *const ort::OrtNode) -> String {
-    let mut p: *const c_char = ptr::null();
-    (api.Node_GetOperatorType.unwrap())(node, &mut p);
-    if p.is_null() {
-        String::new()
-    } else {
-        CStr::from_ptr(p).to_string_lossy().into_owned()
+    unsafe {
+        let mut p: *const c_char = ptr::null();
+        (api.Node_GetOperatorType.unwrap())(node, &mut p);
+        if p.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
     }
 }
 
 unsafe fn node_domain(api: &ort::OrtApi, node: *const ort::OrtNode) -> String {
-    let mut p: *const c_char = ptr::null();
-    (api.Node_GetDomain.unwrap())(node, &mut p);
-    if p.is_null() {
-        String::new()
-    } else {
-        CStr::from_ptr(p).to_string_lossy().into_owned()
+    unsafe {
+        let mut p: *const c_char = ptr::null();
+        (api.Node_GetDomain.unwrap())(node, &mut p);
+        if p.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
     }
 }
 
 unsafe fn node_since_version(api: &ort::OrtApi, node: *const ort::OrtNode) -> i32 {
-    let mut v: i32 = 0;
-    (api.Node_GetSinceVersion.unwrap())(node, &mut v);
-    v
+    unsafe {
+        let mut v: i32 = 0;
+        (api.Node_GetSinceVersion.unwrap())(node, &mut v);
+        v
+    }
 }
 
 /// Element type of node output named `name` (UNDEFINED if not a tensor).
@@ -947,126 +979,130 @@ unsafe fn output_element_type(
     node: *const ort::OrtNode,
     name: &str,
 ) -> ort::ONNXTensorElementDataType {
-    let mut n: usize = 0;
-    (api.Node_GetNumOutputs.unwrap())(node, &mut n);
-    let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
-    if n > 0 {
-        (api.Node_GetOutputs.unwrap())(node, v.as_mut_ptr(), n);
+    unsafe {
+        let mut n: usize = 0;
+        (api.Node_GetNumOutputs.unwrap())(node, &mut n);
+        let mut v: Vec<*const ort::OrtValueInfo> = vec![ptr::null(); n];
+        if n > 0 {
+            (api.Node_GetOutputs.unwrap())(node, v.as_mut_ptr(), n);
+        }
+        for &vi in &v {
+            if vi.is_null() || value_info_name(api, vi) != name {
+                continue;
+            }
+            let mut ti: *const ort::OrtTypeInfo = ptr::null();
+            let st = (api.GetValueInfoTypeInfo.unwrap())(vi, &mut ti);
+            if !st.is_null() {
+                release_status(api, st);
+                return 0;
+            }
+            if ti.is_null() {
+                return 0;
+            }
+            let mut onnx_type: ort::ONNXType = 0;
+            (api.GetOnnxTypeFromTypeInfo.unwrap())(ti, &mut onnx_type);
+            if onnx_type != ort::ONNXType_ONNX_TYPE_TENSOR {
+                return 0;
+            }
+            let mut tsi: *const ort::OrtTensorTypeAndShapeInfo = ptr::null();
+            (api.CastTypeInfoToTensorInfo.unwrap())(ti, &mut tsi);
+            if tsi.is_null() {
+                return 0;
+            }
+            let mut dtype: ort::ONNXTensorElementDataType = 0;
+            (api.GetTensorElementType.unwrap())(tsi, &mut dtype);
+            return dtype;
+        }
+        0
     }
-    for &vi in &v {
-        if vi.is_null() || value_info_name(api, vi) != name {
-            continue;
-        }
-        let mut ti: *const ort::OrtTypeInfo = ptr::null();
-        let st = (api.GetValueInfoTypeInfo.unwrap())(vi, &mut ti);
-        if !st.is_null() {
-            release_status(api, st);
-            return 0;
-        }
-        if ti.is_null() {
-            return 0;
-        }
-        let mut onnx_type: ort::ONNXType = 0;
-        (api.GetOnnxTypeFromTypeInfo.unwrap())(ti, &mut onnx_type);
-        if onnx_type != ort::ONNXType_ONNX_TYPE_TENSOR {
-            return 0;
-        }
-        let mut tsi: *const ort::OrtTensorTypeAndShapeInfo = ptr::null();
-        (api.CastTypeInfoToTensorInfo.unwrap())(ti, &mut tsi);
-        if tsi.is_null() {
-            return 0;
-        }
-        let mut dtype: ort::ONNXTensorElementDataType = 0;
-        (api.GetTensorElementType.unwrap())(tsi, &mut dtype);
-        return dtype;
-    }
-    0
 }
 
 /// Generic attribute copy: every INT/FLOAT/INTS/FLOATS/STRING attr into the NodeDesc maps.
 unsafe fn collect_attributes(api: &ort::OrtApi, node: *const ort::OrtNode, nd: &mut NodeDesc) {
-    let mut num: usize = 0;
-    (api.Node_GetNumAttributes.unwrap())(node, &mut num);
-    if num == 0 {
-        return;
-    }
-    let mut attrs: Vec<*const ort::OrtOpAttr> = vec![ptr::null(); num];
-    (api.Node_GetAttributes.unwrap())(node, attrs.as_mut_ptr(), num);
-    let read = api.ReadOpAttr.unwrap();
-    for &attr in &attrs {
-        if attr.is_null() {
-            continue;
+    unsafe {
+        let mut num: usize = 0;
+        (api.Node_GetNumAttributes.unwrap())(node, &mut num);
+        if num == 0 {
+            return;
         }
-        let mut name_p: *const c_char = ptr::null();
-        (api.OpAttr_GetName.unwrap())(attr, &mut name_p);
-        if name_p.is_null() {
-            continue;
-        }
-        let name = CStr::from_ptr(name_p).to_string_lossy().into_owned();
-        let mut atype: ort::OrtOpAttrType = 0;
-        (api.OpAttr_GetType.unwrap())(attr, &mut atype);
-        match atype {
-            t if t == ort::OrtOpAttrType_ORT_OP_ATTR_INT => {
-                let mut v: i64 = 0;
-                let mut out: usize = 0;
-                let st = read(
-                    attr,
-                    atype,
-                    &mut v as *mut i64 as *mut c_void,
-                    std::mem::size_of::<i64>(),
-                    &mut out,
-                );
-                if st.is_null() {
-                    nd.ints.insert(name, v);
-                } else {
-                    release_status(api, st);
-                }
+        let mut attrs: Vec<*const ort::OrtOpAttr> = vec![ptr::null(); num];
+        (api.Node_GetAttributes.unwrap())(node, attrs.as_mut_ptr(), num);
+        let read = api.ReadOpAttr.unwrap();
+        for &attr in &attrs {
+            if attr.is_null() {
+                continue;
             }
-            t if t == ort::OrtOpAttrType_ORT_OP_ATTR_FLOAT => {
-                let mut v: f32 = 0.0;
-                let mut out: usize = 0;
-                let st = read(
-                    attr,
-                    atype,
-                    &mut v as *mut f32 as *mut c_void,
-                    std::mem::size_of::<f32>(),
-                    &mut out,
-                );
-                if st.is_null() {
-                    nd.floats.insert(name, v);
-                } else {
-                    release_status(api, st);
-                }
+            let mut name_p: *const c_char = ptr::null();
+            (api.OpAttr_GetName.unwrap())(attr, &mut name_p);
+            if name_p.is_null() {
+                continue;
             }
-            t if t == ort::OrtOpAttrType_ORT_OP_ATTR_INTS => {
-                if let Some(v) = read_array::<i64>(api, attr, atype) {
-                    nd.int_arrays.insert(name, v);
-                }
-            }
-            t if t == ort::OrtOpAttrType_ORT_OP_ATTR_FLOATS => {
-                if let Some(v) = read_array::<f32>(api, attr, atype) {
-                    nd.float_arrays.insert(name, v);
-                }
-            }
-            t if t == ort::OrtOpAttrType_ORT_OP_ATTR_STRING => {
-                let mut needed: usize = 0;
-                let probe = read(attr, atype, ptr::null_mut(), 0, &mut needed);
-                release_status(api, probe);
-                if needed > 0 {
-                    let mut buf: Vec<u8> = vec![0u8; needed];
+            let name = CStr::from_ptr(name_p).to_string_lossy().into_owned();
+            let mut atype: ort::OrtOpAttrType = 0;
+            (api.OpAttr_GetType.unwrap())(attr, &mut atype);
+            match atype {
+                t if t == ort::OrtOpAttrType_ORT_OP_ATTR_INT => {
+                    let mut v: i64 = 0;
                     let mut out: usize = 0;
-                    let st = read(attr, atype, buf.as_mut_ptr() as *mut c_void, needed, &mut out);
+                    let st = read(
+                        attr,
+                        atype,
+                        &mut v as *mut i64 as *mut c_void,
+                        std::mem::size_of::<i64>(),
+                        &mut out,
+                    );
                     if st.is_null() {
-                        buf.truncate(out.min(needed));
-                        if let Ok(s) = String::from_utf8(buf) {
-                            nd.strings.insert(name, s);
-                        }
+                        nd.ints.insert(name, v);
                     } else {
                         release_status(api, st);
                     }
                 }
+                t if t == ort::OrtOpAttrType_ORT_OP_ATTR_FLOAT => {
+                    let mut v: f32 = 0.0;
+                    let mut out: usize = 0;
+                    let st = read(
+                        attr,
+                        atype,
+                        &mut v as *mut f32 as *mut c_void,
+                        std::mem::size_of::<f32>(),
+                        &mut out,
+                    );
+                    if st.is_null() {
+                        nd.floats.insert(name, v);
+                    } else {
+                        release_status(api, st);
+                    }
+                }
+                t if t == ort::OrtOpAttrType_ORT_OP_ATTR_INTS => {
+                    if let Some(v) = read_array::<i64>(api, attr, atype) {
+                        nd.int_arrays.insert(name, v);
+                    }
+                }
+                t if t == ort::OrtOpAttrType_ORT_OP_ATTR_FLOATS => {
+                    if let Some(v) = read_array::<f32>(api, attr, atype) {
+                        nd.float_arrays.insert(name, v);
+                    }
+                }
+                t if t == ort::OrtOpAttrType_ORT_OP_ATTR_STRING => {
+                    let mut needed: usize = 0;
+                    let probe = read(attr, atype, ptr::null_mut(), 0, &mut needed);
+                    release_status(api, probe);
+                    if needed > 0 {
+                        let mut buf: Vec<u8> = vec![0u8; needed];
+                        let mut out: usize = 0;
+                        let st = read(attr, atype, buf.as_mut_ptr() as *mut c_void, needed, &mut out);
+                        if st.is_null() {
+                            buf.truncate(out.min(needed));
+                            if let Ok(s) = String::from_utf8(buf) {
+                                nd.strings.insert(name, s);
+                            }
+                        } else {
+                            release_status(api, st);
+                        }
+                    }
+                }
+                _ => {} // STRINGS / GRAPH / TENSOR not carried by wave-1 ops.
             }
-            _ => {} // STRINGS / GRAPH / TENSOR not carried by wave-1 ops.
         }
     }
 }
@@ -1077,30 +1113,32 @@ unsafe fn read_array<T: Copy + Default>(
     attr: *const ort::OrtOpAttr,
     atype: ort::OrtOpAttrType,
 ) -> Option<Vec<T>> {
-    let read = api.ReadOpAttr.unwrap();
-    let mut needed_bytes: usize = 0;
-    // The size-probe read returns a non-OK status ("result buffer too small") that must be freed.
-    let probe = read(attr, atype, ptr::null_mut(), 0, &mut needed_bytes);
-    release_status(api, probe);
-    if needed_bytes == 0 {
-        return Some(Vec::new());
-    }
-    let elem = std::mem::size_of::<T>();
-    let count = needed_bytes / elem;
-    let mut buf: Vec<T> = vec![T::default(); count];
-    let mut out: usize = 0;
-    let st = read(
-        attr,
-        atype,
-        buf.as_mut_ptr() as *mut c_void,
-        needed_bytes,
-        &mut out,
-    );
-    if st.is_null() {
-        Some(buf)
-    } else {
-        release_status(api, st);
-        None
+    unsafe {
+        let read = api.ReadOpAttr.unwrap();
+        let mut needed_bytes: usize = 0;
+        // The size-probe read returns a non-OK status ("result buffer too small") that must be freed.
+        let probe = read(attr, atype, ptr::null_mut(), 0, &mut needed_bytes);
+        release_status(api, probe);
+        if needed_bytes == 0 {
+            return Some(Vec::new());
+        }
+        let elem = std::mem::size_of::<T>();
+        let count = needed_bytes / elem;
+        let mut buf: Vec<T> = vec![T::default(); count];
+        let mut out: usize = 0;
+        let st = read(
+            attr,
+            atype,
+            buf.as_mut_ptr() as *mut c_void,
+            needed_bytes,
+            &mut out,
+        );
+        if st.is_null() {
+            Some(buf)
+        } else {
+            release_status(api, st);
+            None
+        }
     }
 }
 
@@ -1141,8 +1179,10 @@ unsafe extern "C" fn create_state(
     _compute_context: *mut ort::OrtNodeComputeContext,
     compute_state: *mut *mut c_void,
 ) -> *mut ort::OrtStatus {
-    *compute_state = this_ptr as *mut c_void;
-    ptr::null_mut()
+    unsafe {
+        *compute_state = this_ptr as *mut c_void;
+        ptr::null_mut()
+    }
 }
 
 unsafe extern "C" fn release_state(_this: *mut ort::OrtNodeComputeInfo, _state: *mut c_void) {}
@@ -1152,24 +1192,26 @@ unsafe extern "C" fn compute(
     state: *mut c_void,
     kctx: *mut ort::OrtKernelContext,
 ) -> *mut ort::OrtStatus {
-    let info = &mut *(state as *mut SubgraphComputeInfo);
-    let api = &*info.ort_api;
+    unsafe {
+        let info = &mut *(state as *mut SubgraphComputeInfo);
+        let api = &*info.ort_api;
 
-    let node_count = info.plan.nodes.len();
-    let tr = crate::trace::tracer();
-    tr.note_thread("mlx.ep.compute");
-    let _region = tr.subgraph_region(node_count);
-    tr.sample_gpu_counters();
-    let mut tctx = TranslationContext::new(&mut info.plan, info.ort_api, kctx, info.stream);
-    match tctx.execute() {
-        Ok(()) => {
-            eprintln!("[rust-mlx-ep] Compute: subgraph run via mlx-c ({node_count} node(s))");
-            ptr::null_mut()
-        }
-        Err(msg) => {
-            let c = CString::new(format!("MLX subgraph failed: {msg}"))
-                .unwrap_or_else(|_| CString::new("MLX subgraph failed").unwrap());
-            (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr())
+        let node_count = info.plan.nodes.len();
+        let tr = crate::trace::tracer();
+        tr.note_thread("mlx.ep.compute");
+        let _region = tr.subgraph_region(node_count);
+        tr.sample_gpu_counters();
+        let mut tctx = TranslationContext::new(&mut info.plan, info.ort_api, kctx, info.stream);
+        match tctx.execute() {
+            Ok(()) => {
+                eprintln!("[rust-mlx-ep] Compute: subgraph run via mlx-c ({node_count} node(s))");
+                ptr::null_mut()
+            }
+            Err(msg) => {
+                let c = CString::new(format!("MLX subgraph failed: {msg}"))
+                    .unwrap_or_else(|_| CString::new("MLX subgraph failed").unwrap());
+                (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr())
+            }
         }
     }
 }
@@ -1179,10 +1221,12 @@ unsafe extern "C" fn release_node_compute_infos(
     infos: *mut *mut ort::OrtNodeComputeInfo,
     num: usize,
 ) {
-    for i in 0..num {
-        let ptr = *infos.add(i);
-        if !ptr.is_null() {
-            drop(Box::from_raw(ptr as *mut SubgraphComputeInfo));
+    unsafe {
+        for i in 0..num {
+            let ptr = *infos.add(i);
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr as *mut SubgraphComputeInfo));
+            }
         }
     }
 }

@@ -61,6 +61,54 @@ pub fn detect_seq_len(
     None
 }
 
+/// Detect whether this decode session drives a fixed-capacity SHARED KV buffer (present aliased onto
+/// past at a runtime-owned max length) as opposed to the growing past/present contract. Reads live
+/// ctx once at compiled-closure build time: `cap` = a GQA past-KV cache's seq-axis (2) length, and
+/// `total` = valid keys after this step (= `total_sequence_length[0]`, or the `attention_mask` width
+/// when that scalar is computed in-subgraph). Shared iff `cap > total - S` (the buffer holds more
+/// than the valid past). Returns `None` when the shape is not a recognizable decoder GQA.
+fn detect_shared_kv(
+    plan: &Plan,
+    api: *const ort::OrtApi,
+    kctx: *mut ort::OrtKernelContext,
+) -> Option<bool> {
+    let s = detect_seq_len(api, kctx, plan).unwrap_or(1);
+    for node in &plan.nodes {
+        if node.op_type != "GroupQueryAttention" || node.inputs.len() < 7 {
+            continue;
+        }
+        // Capacity from the past-KV cache (input[3], a ctx input) seq axis.
+        let past_k = &node.inputs[3];
+        if past_k.source != Src::CtxInput {
+            continue;
+        }
+        let cap = match read_ctx_input_raw(api, kctx, past_k.ctx_index) {
+            Ok((_d, shape, _t)) => *shape.get(2)? as i32,
+            Err(_) => continue,
+        };
+        // Valid keys after this step. Prefer total_sequence_length (input[6]) when it arrives as a
+        // ctx input; otherwise recover it from the attention_mask width (the in-subgraph scalar is
+        // Cast(Gather(Shape(attention_mask),1))).
+        let ts = &node.inputs[6];
+        let total = if ts.source == Src::CtxInput && !ts.constant {
+            match read_ctx_input_raw(api, kctx, ts.ctx_index) {
+                Ok((data, _shape, _t)) if !data.is_null() => unsafe { *(data as *const i32) },
+                _ => continue,
+            }
+        } else {
+            let mask_ci = plan.nodes.iter().flat_map(|n| n.inputs.iter()).find(|inp| {
+                inp.source == Src::CtxInput && inp.name == "attention_mask"
+            })?;
+            match read_ctx_input_raw(api, kctx, mask_ci.ctx_index) {
+                Ok((_d, shape, _t)) => *shape.get(1)? as i32,
+                Err(_) => continue,
+            }
+        };
+        return Some(cap > total - s);
+    }
+    None
+}
+
 /// A contiguous unit-stride slice `[start, stop)` -> owning [`Array`].
 fn mk_slice(
     a: mlxsys::mlx_array,
@@ -327,6 +375,16 @@ fn build_compiled_closure(
     };
     if hd == 0 || half == 0 || 2 * half != hd {
         return; // partial-rotary head not supported by the compiled path
+    }
+
+    // Disable the compiled fast path for a fixed-capacity shared KV buffer. In that contract the
+    // present output must be written IN PLACE at the (data-dependent) valid-past offset and emitted
+    // at the buffer's full capacity, which the shapeless compiled trace cannot express (its concat
+    // form would produce a cap+S present and fail ORT's pre-bound output-size check). Such sessions
+    // run the eager shared-buffer path instead — still O(1)/token, just not fused. Detected once here
+    // from live ctx: shared iff the past-KV capacity exceeds the valid-past length (= total keys - S).
+    if detect_shared_kv(unsafe { &*plan_ptr }, api, kctx).unwrap_or(false) {
+        return;
     }
 
     // Publish the discovered schema + a stable trace payload onto the plan.

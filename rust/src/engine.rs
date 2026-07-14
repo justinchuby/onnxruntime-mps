@@ -872,6 +872,53 @@ impl<'a> TranslationContext<'a> {
         unsafe { mlxsys::mlx_array_data_uint8(a) as *const u8 }
     }
 
+    /// Evaluate a 0-d/1-element integer array and read its scalar value host-side (int32 or int64).
+    /// Used by the eager GQA path to recover `total_sequence_length` (an in-graph scalar) so the
+    /// valid-past length becomes a known integer for static slice bounds. This forces a small
+    /// mid-graph eval, mirroring the host-computed ops (Det/NonZero/Unique via `contiguous_eval`).
+    pub fn read_scalar_i64(&mut self, a: mlxsys::mlx_array) -> Result<i64, MlxError> {
+        let dt = self.dtype_of(a);
+        let a = if dt == mlxsys::mlx_dtype__MLX_INT64 {
+            a
+        } else {
+            self.astype(a, mlxsys::mlx_dtype__MLX_INT64)?
+        };
+        let a = self.contiguous_eval(a)?;
+        let mut v: i64 = 0;
+        let rc = unsafe { mlxsys::mlx_array_item_int64(&mut v, a) };
+        if rc != 0 {
+            return Err("mlx_array_item_int64 failed".to_string());
+        }
+        Ok(v)
+    }
+
+    /// In-place KV write: functional `slice_update` of `update` into `src` over `[start, stop)`
+    /// (unit stride). Returns the full-shape updated buffer (the untouched region carries `src`'s
+    /// data through), matching the runtime's fixed-capacity shared KV buffer contract.
+    pub fn slice_update(
+        &mut self,
+        src: mlxsys::mlx_array,
+        update: mlxsys::mlx_array,
+        start: &[i32],
+        stop: &[i32],
+    ) -> Result<mlxsys::mlx_array, MlxError> {
+        let strides = vec![1i32; start.len()];
+        self.emit(|res, s| unsafe {
+            mlxsys::mlx_slice_update(
+                res,
+                src,
+                update,
+                start.as_ptr(),
+                start.len(),
+                stop.as_ptr(),
+                stop.len(),
+                strides.as_ptr(),
+                strides.len(),
+                s,
+            )
+        })
+    }
+
     /// Translate a control-flow body subgraph inline: bind its formal inputs to `inputs` (positional),
     /// dispatch every body node through the registry (implicit inputs fall through to the enclosing
     /// env), collect + return the arrays bound to the body's formal outputs, then restore the env.

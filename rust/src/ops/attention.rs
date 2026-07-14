@@ -304,7 +304,34 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
     let qs = ctx.shape_of(q);
     let (b, s) = (qs[0], qs[1]);
     let head = qs[2] / num_heads;
-    let past = ctx.shape_of(past_k)[2];
+    // Sequence capacity of the past-KV cache (its axis-2 length). In the growing (ZeroCopyRebind)
+    // contract this equals the number of valid past keys; in the fixed-capacity shared-buffer
+    // contract it is the runtime-owned max length and exceeds the valid past.
+    let cap = ctx.shape_of(past_k)[2];
+
+    // Recover how many past keys are actually valid and whether the runtime handed us a max-length
+    // shared buffer to write in place. `total_sequence_length` (input[6], int32 scalar) counts the
+    // valid keys after this step (= valid_past + S), so `valid_past = total_sequence_length[0] - S`.
+    // Shared-buffer mode is exactly `cap > valid_past` (past_k is a max-length buffer). The compiled
+    // decode trace cannot eval mid-graph, so it always runs the growing form (and `build_compiled_
+    // closure` disables the compiled path for shared-buffer sessions), keeping `valid_past == cap`.
+    let (shared_buffer, valid_past) = if ctx.rope_dynamic() {
+        (false, cap)
+    } else {
+        let ts = ctx.resolve(&n.inputs[6])?;
+        let total = ctx.read_scalar_i64(ts)? as i32;
+        let vp = total - s;
+        if vp < 0 || vp > cap {
+            // Defensive: an unexpected mask/total width — honor the growing contract.
+            (false, cap)
+        } else {
+            (cap > vp, vp)
+        }
+    };
+    // RoPE positions for the new Q/K rows run [valid_past, valid_past+S). In growing mode this is the
+    // past length exactly as before (bit-for-bit); in shared-buffer mode it must be valid_past, NOT
+    // the buffer capacity.
+    let past = valid_past;
 
     let scale = attr_scale(n, head);
 
@@ -351,11 +378,28 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
         }
     }
 
-    // Append to KV cache along the sequence axis.
-    let present_k = concat2(ctx, past_k, kh, 2)?;
-    let present_v = concat2(ctx, past_v, vh, 2)?;
+    // Append the new K/V to the cache. Two contracts:
+    //   * Shared-buffer (fixed capacity): write the S new rows in place at [valid_past, valid_past+S)
+    //     of the [B,kv,cap,hd] buffer via slice_update, output present at the FULL cap shape (matches
+    //     ORT's pre-bound shared output), and attend over the valid prefix [0, valid_past+S) so causal
+    //     alignment places the S queries at their true positions [valid_past, valid_past+S).
+    //   * Growing: concat past+new along the sequence axis (unchanged legacy behavior).
+    let (present_k, present_v, attn_k, attn_v) = if shared_buffer {
+        let start = [0, 0, valid_past, 0];
+        let stop = [b, kv_heads, valid_past + s, head];
+        let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
+        let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
+        let vp1 = valid_past + s;
+        let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+        let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+        (pk, pv, ak, av)
+    } else {
+        let pk = concat2(ctx, past_k, kh, 2)?;
+        let pv = concat2(ctx, past_v, vh, 2)?;
+        (pk, pv, pk, pv)
+    };
 
-    let attn = sdpa(ctx, qh, present_k, present_v, scale, b"causal\0", empty_array())?;
+    let attn = sdpa(ctx, qh, attn_k, attn_v, scale, b"causal\0", empty_array())?;
     // [B,H,S,hd] -> [B,S,H*hd].
     let t = ctx.transpose(attn, &[0, 2, 1, 3])?;
     let out = ctx.reshape(t, &[b, s, num_heads * head])?;

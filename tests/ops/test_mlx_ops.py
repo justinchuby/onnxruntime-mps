@@ -143,6 +143,39 @@ def test_gqa(name: str, geom: dict[str, int]) -> None:
     m.assert_matches_cpu(model, feeds, rtol=2e-3, atol=2e-3)
 
 
+SHARED_GQA_CASES = [
+    ("shared-decode-h64", dict(batch=1, num_heads=14, kv_heads=2, head=64, seq=1, past=40, cap=128, do_rotary=1)),
+    ("shared-chunked-h64", dict(batch=1, num_heads=14, kv_heads=2, head=64, seq=3, past=8, cap=64, do_rotary=1)),
+    ("shared-decode", dict(batch=1, num_heads=4, kv_heads=2, head=16, seq=1, past=5, cap=32, do_rotary=1)),
+    ("shared-decode-norope", dict(batch=1, num_heads=4, kv_heads=2, head=16, seq=1, past=5, cap=32, do_rotary=0)),
+]
+
+
+@pytest.mark.parametrize("name,geom", SHARED_GQA_CASES, ids=[c[0] for c in SHARED_GQA_CASES])
+def test_gqa_shared_buffer(name: str, geom: dict[str, int]) -> None:
+    """Fixed-capacity shared-buffer GQA: present is emitted at the full ``cap`` capacity with the
+    new K/V written in place at the valid-past offset; attention still matches the ORT-CPU reference.
+    """
+    model, feeds = m.gqa_shared_buffer_model(name, **geom)
+    cap = geom["cap"]
+    valid = geom["past"] + geom["seq"]
+    expected = m.run_cpu(model, feeds)
+    actual = m.run_mlx(model, feeds)
+    # (a) attention output matches ORT CPU within tolerance.
+    np.testing.assert_allclose(actual[0], expected[0], rtol=2e-3, atol=2e-3, err_msg="attn_output")
+    # (b) present carries the full buffer capacity, with the valid prefix (incl. the newly written
+    #     K/V at the offset) matching the reference.
+    for idx in (1, 2):
+        assert actual[idx].shape[2] == cap, f"present[{idx}] capacity must equal {cap}"
+        np.testing.assert_allclose(
+            actual[idx][:, :, :valid, :],
+            expected[idx][:, :, :valid, :],
+            rtol=2e-3,
+            atol=2e-3,
+            err_msg=f"present[{idx}] valid prefix",
+        )
+
+
 def test_gqa_bf16() -> None:
     model, reference, feeds = m.bf16_gqa_model(
         "bf16-decode-h64",

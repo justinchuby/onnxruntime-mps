@@ -173,6 +173,89 @@ def rotary_caches(max_seq: int, rotary_dim: int) -> tuple[np.ndarray, np.ndarray
 
 
 # --- Composite op model builders ----------------------------------------------------------------
+def gqa_shared_buffer_model(
+    name: str,
+    *,
+    batch: int,
+    seq: int,
+    past: int,
+    cap: int,
+    num_heads: int,
+    kv_heads: int,
+    head: int,
+    do_rotary: int,
+    interleaved: int = 0,
+) -> tuple[bytes, dict[str, np.ndarray]]:
+    """GroupQueryAttention driven with a fixed-capacity SHARED KV buffer.
+
+    Unlike :func:`gqa_model` (growing contract, ``past_key`` sized exactly to the valid past),
+    here ``past_key``/``past_value`` are max-length buffers of capacity ``cap`` whose leading
+    ``past`` rows are valid and whose tail ``[past, cap)`` is unused. ``total_sequence_length`` =
+    ``past + seq`` (valid keys) so ``valid_past = past`` while the buffer capacity ``cap`` exceeds
+    it — the shared-buffer path. ``present`` is emitted at the full ``cap`` capacity with the new
+    K/V written in place at rows ``[past, past+seq)``. ORT's CPU GQA computes the reference.
+    """
+    assert cap >= past + seq, "capacity must hold the valid keys"
+    valid = past + seq
+    max_seq = cap + 4
+    scale = 1.0 / np.sqrt(head)
+    rng = np.random.default_rng(hash((name, seq, past, cap)) & 0xFFFFFFFF)
+    q = rng.standard_normal((batch, seq, num_heads * head)).astype(np.float32)
+    k = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    v = rng.standard_normal((batch, seq, kv_heads * head)).astype(np.float32)
+    # Full-capacity buffers: valid rows [0, past) carry history, the tail [past, cap) is buffer
+    # slack (filled with a recognizable sentinel so a mis-offset write is visible).
+    past_k = np.zeros((batch, kv_heads, cap, head), dtype=np.float32)
+    past_v = np.zeros((batch, kv_heads, cap, head), dtype=np.float32)
+    past_k[:, :, :past, :] = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    past_v[:, :, :past, :] = rng.standard_normal((batch, kv_heads, past, head)).astype(np.float32)
+    seqlens_k = np.full((batch,), valid - 1, dtype=np.int32)
+    total = np.array([valid], dtype=np.int32)
+    cos, sin = rotary_caches(max_seq, head)
+
+    inputs = [
+        tensor("query", DataType.FLOAT, [batch, seq, num_heads * head]),
+        tensor("key", DataType.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("value", DataType.FLOAT, [batch, seq, kv_heads * head]),
+        tensor("past_key", DataType.FLOAT, [batch, kv_heads, cap, head]),
+        tensor("past_value", DataType.FLOAT, [batch, kv_heads, cap, head]),
+        tensor("seqlens_k", DataType.INT32, [batch]),
+        tensor("total_sequence_length", DataType.INT32, [1]),
+        tensor("cos_cache", DataType.FLOAT, [max_seq, head // 2]),
+        tensor("sin_cache", DataType.FLOAT, [max_seq, head // 2]),
+    ]
+    outputs = [
+        tensor("attn_output", DataType.FLOAT, [batch, seq, num_heads * head]),
+        tensor("present_key", DataType.FLOAT, [batch, kv_heads, cap, head]),
+        tensor("present_value", DataType.FLOAT, [batch, kv_heads, cap, head]),
+    ]
+    model = make_model(
+        "GroupQueryAttention",
+        inputs,
+        outputs,
+        domain="com.microsoft",
+        attributes={
+            "num_heads": num_heads,
+            "kv_num_heads": kv_heads,
+            "scale": float(scale),
+            "do_rotary": do_rotary,
+            "rotary_interleaved": interleaved,
+        },
+    )
+    feeds = {
+        "query": q,
+        "key": k,
+        "value": v,
+        "past_key": past_k,
+        "past_value": past_v,
+        "seqlens_k": seqlens_k,
+        "total_sequence_length": total,
+        "cos_cache": cos,
+        "sin_cache": sin,
+    }
+    return model, feeds
+
+
 def gqa_model(
     name: str,
     *,

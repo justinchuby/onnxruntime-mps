@@ -106,8 +106,8 @@ bool SameKnownShape(const std::vector<int64_t> &actual,
 
 bool OptionalBiasIsValid(const std::vector<Ort::ConstValueInfo> &inputs,
                          ONNXTensorElementDataType dtype, int64_t channels) {
-  if (inputs.size() < 3 || inputs[2].GetName().empty())
-    return true;
+  if (!SlotPresent(inputs, 2))
+    return true;  // omitted optional bias (absent or NULL value info)
   ONNXTensorElementDataType bias_type;
   std::vector<int64_t> bias_shape;
   return TensorInfo(inputs[2], bias_type, &bias_shape) && bias_type == dtype &&

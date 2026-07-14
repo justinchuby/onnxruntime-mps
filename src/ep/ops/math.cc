@@ -119,6 +119,14 @@ void SwishOp(TranslationContext& ctx, const NodeDesc& n) {
 
 void LogSoftmaxOp(TranslationContext& ctx, const NodeDesc& n) {
   mlx_array x = ctx.Resolve(n.inputs[0]);
+  // mlx_logsumexp aborts at construction on a zero-size array. LogSoftmax is shape-preserving, so an
+  // empty input yields an empty output — emit it directly on MLX without touching the reduce kernel.
+  if (mlx_array_size(x) == 0) {
+    mlx_array empty = NewResult(ctx);
+    MLX_CHECK(mlx_zeros_like(&empty, x, ctx.stream()));
+    ctx.Bind(n.outputs[0], empty);
+    return;
+  }
   mlx_array normalizer = NewResult(ctx);
   MLX_CHECK(mlx_logsumexp_axis(&normalizer, x, /*axis=*/-1, /*keepdims=*/true, ctx.stream()));
   ctx.Bind(n.outputs[0], ApplyBinary(ctx, x, normalizer, mlx_subtract));
@@ -386,7 +394,7 @@ bool ClipClaim(Ort::ConstNode node) {
     return false;
   }
   for (size_t i = 1; i < inputs.size(); ++i) {
-    if (inputs[i].GetName().empty()) continue;
+    if (!SlotPresent(inputs, i)) continue;  // omitted optional min/max (NULL value info)
     ONNXTensorElementDataType bound;
     if (!TensorInfo(inputs[i], bound) || bound != x ||
         !ScalarOrSuffixBroadcast(inputs[0], inputs[i])) {
@@ -465,7 +473,7 @@ bool IsConstScalarI64(Ort::ConstValueInfo value, int64_t* result = nullptr) {
 }
 
 bool IsBoundaryValueType(ONNXTensorElementDataType type) {
-  return IsMlxFloatType(type) || type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE ||
+  return IsMlxFloatType(type) ||  // float64 excluded: aborts on the Metal GPU (→ CPU fallback)
          IsSignedIntegerType(type) ||
          (IsUnsignedIntegerType(type) && type != ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64) ||
          type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
@@ -511,7 +519,7 @@ bool TriluClaim(Ort::ConstNode node) {
       in != out || !IsBoundaryValueType(in)) {
     return false;
   }
-  if (inputs.size() == 2 && !inputs[1].GetName().empty() && !IsConstScalarI64(inputs[1])) {
+  if (inputs.size() == 2 && SlotPresent(inputs, 1) && !IsConstScalarI64(inputs[1])) {
     return false;
   }
   const int64_t upper = IntAttribute(node, "upper", 1);

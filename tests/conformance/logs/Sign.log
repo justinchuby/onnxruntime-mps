@@ -129,4 +129,4 @@ onnx_tests/helpers.py:129: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_elementwise.py::test_Sign_13[v17-float16] - AssertionError: 
 FAILED tests/test_elementwise.py::test_Sign_13[v17-float32] - AssertionError: 
-2 failed, 9 passed, 1187 deselected in 2.44s
+2 failed, 9 passed, 1187 deselected in 2.33s

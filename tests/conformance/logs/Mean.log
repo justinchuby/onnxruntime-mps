@@ -27,7 +27,7 @@ onnx_tests/runtime_wrappers.py:34: in run_reference
           ^^^^^^^^^^^^^^^^^^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnx.reference.ops.op_mean.Mean object at 0x12746ff50>
+self = <onnx.reference.ops.op_mean.Mean object at 0x1201bbf50>
 args = (array(0., dtype=float16), array([], dtype=float16))
 
     def _run(self, *args):
@@ -76,7 +76,7 @@ onnx_tests/runtime_wrappers.py:34: in run_reference
           ^^^^^^^^^^^^^^^^^^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnx.reference.ops.op_mean.Mean object at 0x127b059d0>
+self = <onnx.reference.ops.op_mean.Mean object at 0x130209ad0>
 args = (array(0., dtype=float32), array([], dtype=float32))
 
     def _run(self, *args):
@@ -114,13 +114,13 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 tests/utils.py:79: in test_fun
     candidate = run_candidate(model)
                 ^^^^^^^^^^^^^^^^^^^^
-../onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
     sess = ort.InferenceSession(
 .pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
     self._create_inference_session(providers, provider_options, disabled_optimizers)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1274766c0>
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x12011a6c0>
 providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
 provider_options = [{}, {}], disabled_optimizers = set()
 
@@ -227,20 +227,20 @@ E        spox_fun=mean)
 
 .pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:634: Fail
 ----------------------------- Captured stderr call -----------------------------
-2026-07-13 17:03:49.696 python[7985:2476633] 2026-07-13 17:03:49.696208 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.718 python[7985:2476633] 2026-07-13 17:03:49.718849 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.740 python[7985:2476633] 2026-07-13 17:03:49.740819 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.799 python[7985:2476633] 2026-07-13 17:03:49.799376 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.820 python[7985:2476633] 2026-07-13 17:03:49.820838 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.842 python[7985:2476633] 2026-07-13 17:03:49.842115 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.864 python[7985:2476633] 2026-07-13 17:03:49.864921 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.886 python[7985:2476633] 2026-07-13 17:03:49.886096 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.907 python[7985:2476633] 2026-07-13 17:03:49.907099 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.928 python[7985:2476633] 2026-07-13 17:03:49.928154 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.949 python[7985:2476633] 2026-07-13 17:03:49.949016 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
-2026-07-13 17:03:49.973 python[7985:2476633] 2026-07-13 17:03:49.973498 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.132 python[20229:3120977] 2026-07-13 18:18:55.132095 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.155 python[20229:3120977] 2026-07-13 18:18:55.155087 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.177 python[20229:3120977] 2026-07-13 18:18:55.177284 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.237 python[20229:3120977] 2026-07-13 18:18:55.237511 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.259 python[20229:3120977] 2026-07-13 18:18:55.259381 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.280 python[20229:3120977] 2026-07-13 18:18:55.280542 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.302 python[20229:3120977] 2026-07-13 18:18:55.302156 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.323 python[20229:3120977] 2026-07-13 18:18:55.323619 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.344 python[20229:3120977] 2026-07-13 18:18:55.344230 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.383 python[20229:3120977] 2026-07-13 18:18:55.383597 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.410 python[20229:3120977] 2026-07-13 18:18:55.410253 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
+2026-07-13 18:18:55.434 python[20229:3120977] 2026-07-13 18:18:55.434691 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Mean node with name 'Mean_0' is not set.
 =========================== short test summary info ============================
 FAILED tests/test_statistical.py::test_Mean_13[v17-float16] - ValueError: non...
 FAILED tests/test_statistical.py::test_Mean_13[v17-float32] - ValueError: non...
 FAILED tests/test_statistical.py::test_Mean_13[v17-float64] - onnxruntime.cap...
-3 failed, 1195 deselected in 2.23s
+3 failed, 1195 deselected in 2.18s

@@ -20,4 +20,4 @@ tests/test_elementwise.py::test_Div_14[v17-float64]
     return np.divide(x, y)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-11 passed, 1187 deselected, 30 warnings in 1.52s
+11 passed, 1187 deselected, 30 warnings in 1.45s

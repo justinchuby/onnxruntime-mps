@@ -1,0 +1,315 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_______________________ test_LogSoftmax_13[v17-float16] ________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:51: in run
+    res = OpRunUnary.run(self, x)
+          ^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_log_softmax.LogSoftmax object at 0x12c504b00>
+X = array([], dtype=float16)
+
+    def _run(self, X):
+        Y = Softmax._run(self, X)[0]
+>       np.log(Y, out=Y)
+E       ValueError: output array is read-only
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('float16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs=[array([], dtype=float16)],
+E        attribute_kwargs={'axis': 0},
+E        spox_fun=log_softmax)
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_log_softmax.py:14: ValueError
+_______________________ test_LogSoftmax_13[v17-float32] ________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72, in test_fun
+  |     @pytest.mark.parametrize(
+  |                ^^^^^^^^^^^^
+  |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 2274, in wrapped_test
+  |     raise the_error_hypothesis_found
+  | ExceptionGroup: Hypothesis found 3 distinct failures. (3 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 94, in test_fun
+    |     h.assert_allclose(cand, exp, err_msg=err_msg)
+    |     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/helpers.py", line 129, in assert_allclose
+    |     np.testing.assert_allclose(actual, desired, **kwargs, err_msg=err_msg)  # type: ignore
+    |     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 1780, in assert_allclose
+    |     assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    |     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          verbose=verbose, header=header, equal_nan=equal_nan,
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          strict=strict)
+    |                          ^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 858, in assert_array_compare
+    |     infs_mask = func_assert_same_pos(
+    |         x, y,
+    |         func=isinf_func,
+    |         hasval='inf')
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 795, in func_assert_same_pos
+    |     raise AssertionError(msg)
+    | AssertionError: 
+    | Not equal to tolerance rtol=1e-05, atol=0
+    | output `0` of `LogSoftmax` did not meet expectation
+    |   inputs: `[array([104.,   0.], dtype=float32)]`
+    |   attributes: `{'axis': 0}`
+    | inf location mismatch:
+    |  ACTUAL: array([   0., -104.], dtype=float32)
+    |  DESIRED: array([  0., -inf], dtype=float32)
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float32'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([104.,   0.], dtype=float32)],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:114
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:640
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1096
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1106
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1107
+    |         (and 3 more with settings.verbosity >= verbose)
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 94, in test_fun
+    |     h.assert_allclose(cand, exp, err_msg=err_msg)
+    |     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/helpers.py", line 129, in assert_allclose
+    |     np.testing.assert_allclose(actual, desired, **kwargs, err_msg=err_msg)  # type: ignore
+    |     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 1780, in assert_allclose
+    |     assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    |     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          verbose=verbose, header=header, equal_nan=equal_nan,
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          strict=strict)
+    |                          ^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 988, in assert_array_compare
+    |     raise AssertionError(msg)
+    | AssertionError: 
+    | Not equal to tolerance rtol=1e-05, atol=0
+    | output `0` of `LogSoftmax` did not meet expectation
+    |   inputs: `[array([512., 512.], dtype=float32)]`
+    |   attributes: `{'axis': 0}`
+    | Mismatched elements: 2 / 2 (100%)
+    | Mismatch at indices:
+    |  [0]: -0.69317626953125 (ACTUAL), -0.6931471824645996 (DESIRED)
+    |  [1]: -0.69317626953125 (ACTUAL), -0.6931471824645996 (DESIRED)
+    | Max absolute difference among violations: 2.9087067e-05
+    | Max relative difference among violations: 4.1963765e-05
+    |  ACTUAL: array([-0.693176, -0.693176], dtype=float32)
+    |  DESIRED: array([-0.693147, -0.693147], dtype=float32)
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float32'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([512., 512.], dtype=float32)],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:114
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:612
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:640
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:51
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:99
+    |         (and 12 more with settings.verbosity >= verbose)
+    +---------------- 3 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 80, in test_fun
+    |     expected = run_reference(model)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/runtime_wrappers.py", line 34, in run_reference
+    |     result_list = sess.run(None, {})
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py", line 603, in run
+    |     outputs = node.run(*inputs, **linked_attributes)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py", line 51, in run
+    |     res = OpRunUnary.run(self, x)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py", line 29, in run
+    |     res = self._run(x)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_log_softmax.py", line 14, in _run
+    |     np.log(Y, out=Y)
+    |     ~~~~~~^^^^^^^^^^
+    | ValueError: output array is read-only
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float32'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([], dtype=float32)],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_softmax.py:14
+    +------------------------------------
+_______________________ test_LogSoftmax_13[v17-float64] ________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72, in test_fun
+  |     @pytest.mark.parametrize(
+  |                ^^^^^^^^^^^^
+  |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 2274, in wrapped_test
+  |     raise the_error_hypothesis_found
+  | ExceptionGroup: Hypothesis found 3 distinct failures. (3 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 94, in test_fun
+    |     h.assert_allclose(cand, exp, err_msg=err_msg)
+    |     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/helpers.py", line 129, in assert_allclose
+    |     np.testing.assert_allclose(actual, desired, **kwargs, err_msg=err_msg)  # type: ignore
+    |     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 1780, in assert_allclose
+    |     assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    |     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          verbose=verbose, header=header, equal_nan=equal_nan,
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          strict=strict)
+    |                          ^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 858, in assert_array_compare
+    |     infs_mask = func_assert_same_pos(
+    |         x, y,
+    |         func=isinf_func,
+    |         hasval='inf')
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 795, in func_assert_same_pos
+    |     raise AssertionError(msg)
+    | AssertionError: 
+    | Not equal to tolerance rtol=1e-07, atol=0
+    | output `0` of `LogSoftmax` did not meet expectation
+    |   inputs: `[array([  0., 746.])]`
+    |   attributes: `{'axis': 0}`
+    | inf location mismatch:
+    |  ACTUAL: array([-746.,    0.])
+    |  DESIRED: array([-inf,   0.])
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float64'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([  0., 746.])],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:114
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:640
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1096
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1106
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:1107
+    |         (and 2 more with settings.verbosity >= verbose)
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 94, in test_fun
+    |     h.assert_allclose(cand, exp, err_msg=err_msg)
+    |     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/helpers.py", line 129, in assert_allclose
+    |     np.testing.assert_allclose(actual, desired, **kwargs, err_msg=err_msg)  # type: ignore
+    |     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 1780, in assert_allclose
+    |     assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+    |     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          verbose=verbose, header=header, equal_nan=equal_nan,
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                          strict=strict)
+    |                          ^^^^^^^^^^^^^^
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py", line 988, in assert_array_compare
+    |     raise AssertionError(msg)
+    | AssertionError: 
+    | Not equal to tolerance rtol=1e-07, atol=0
+    | output `0` of `LogSoftmax` did not meet expectation
+    |   inputs: `[array([  0., 737.])]`
+    |   attributes: `{'axis': 0}`
+    | Mismatched elements: 1 / 2 (50%)
+    | Mismatch at index:
+    |  [0]: -737.0 (ACTUAL), -736.9999252407185 (DESIRED)
+    | Max absolute difference among violations: 7.47592815e-05
+    | Max relative difference among violations: 1.01437299e-07
+    |  ACTUAL: array([-737.,    0.])
+    |  DESIRED: array([-736.999925,    0.      ])
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float64'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([  0., 737.])],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:114
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:612
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:640
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:51
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/fromnumeric.py:99
+    |         (and 12 more with settings.verbosity >= verbose)
+    +---------------- 3 ----------------
+    | Traceback (most recent call last):
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 80, in test_fun
+    |     expected = run_reference(model)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/runtime_wrappers.py", line 34, in run_reference
+    |     result_list = sess.run(None, {})
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py", line 603, in run
+    |     outputs = node.run(*inputs, **linked_attributes)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py", line 51, in run
+    |     res = OpRunUnary.run(self, x)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py", line 29, in run
+    |     res = self._run(x)
+    |   File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_log_softmax.py", line 14, in _run
+    |     np.log(Y, out=Y)
+    |     ~~~~~~^^^^^^^^^^
+    | ValueError: output array is read-only
+    | Falsifying example: test_fun(
+    |     op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+    |     dtype=dtype('float64'),
+    |     data=data(...),
+    | )
+    | Draw 1: TestCaseDraw(inputs=[array([], dtype=float64)],
+    |  attribute_kwargs={'axis': 0},
+    |  spox_fun=log_softmax)
+    | Explanation:
+    |     These lines were always and only run by failing examples:
+    |         /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_softmax.py:14
+    +------------------------------------
+=============================== warnings summary ===============================
+tests/test_elementwise.py: 69 warnings
+  /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_log_softmax.py:14: RuntimeWarning: divide by zero encountered in log
+    np.log(Y, out=Y)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_elementwise.py::test_LogSoftmax_13[v17-float16] - ValueErro...
+FAILED tests/test_elementwise.py::test_LogSoftmax_13[v17-float32] - Exception...
+FAILED tests/test_elementwise.py::test_LogSoftmax_13[v17-float64] - Exception...
+3 failed, 1195 deselected, 69 warnings in 2.92s

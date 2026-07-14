@@ -76,4 +76,4 @@ tests/test_elementwise.py: 18 warnings
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 FAILED tests/test_elementwise.py::test_Mish_18[v18-float16] - AssertionError: 
-1 failed, 2 passed, 1195 deselected, 18 warnings in 1.07s
+1 failed, 2 passed, 1195 deselected, 18 warnings in 0.97s

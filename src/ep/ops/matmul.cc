@@ -51,13 +51,24 @@ mlx_array ScalarLike(TranslationContext& ctx, float value, mlx_dtype dt) {
 // ---- MatMul (ai.onnx) -----------------------------------------------------------------------
 
 // Y = A @ B. mlx_matmul broadcasts the leading (batch) dims exactly like numpy/ONNX MatMul, so a
-// single call covers the rank-2 and rank>2 batched/broadcast forms.
+// single call covers the rank-2 and rank>2 batched/broadcast forms. When the result is empty (a
+// zero-sized contraction/batch/broadcast dim), mlx_matmul returns an array with no backing buffer,
+// and the boundary CopyOut's typed data access would segfault on it — so re-materialise the empty
+// result as a clean, correctly-shaped zeros array (matches numpy.matmul's empty output exactly).
 void MatMulOp(TranslationContext& ctx, const NodeDesc& n) {
   mlx_array a = ctx.Resolve(n.inputs[0]);
   mlx_array b = ctx.Resolve(n.inputs[1]);
   mlx_array y = mlx_array_new();
   MLX_CHECK(mlx_matmul(&y, a, b, ctx.stream()));
-  ctx.Bind(n.outputs[0], ctx.Keep(y));
+  ctx.Keep(y);
+  if (mlx_array_size(y) == 0) {
+    const std::vector<int> shp = TranslationContext::ShapeOf(y);
+    mlx_array z = mlx_array_new();
+    MLX_CHECK(mlx_zeros(&z, shp.data(), shp.size(), mlx_array_dtype(y), ctx.stream()));
+    ctx.Bind(n.outputs[0], ctx.Keep(z));
+    return;
+  }
+  ctx.Bind(n.outputs[0], y);
 }
 
 // ---- Gemm (ai.onnx) -------------------------------------------------------------------------

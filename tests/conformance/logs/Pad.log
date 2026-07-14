@@ -1,90 +1,437 @@
-Fatal Python error: Segmentation fault
+.F...F.....F.                                                            [100%]
+=================================== FAILURES ===================================
+___________________________ test_Pad_21[v21-uint16] ____________________________
 
-Current thread 0x00000001ed809e80 (most recent call first):
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 320 in run
-  File "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py", line 144 in run_mlx
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 79 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1004 in test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1107 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 824 in default_executor
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1150 in execute_once
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1212 in _execute_once_for_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 434 in __stoppable_test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 575 in test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 528 in cached_test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1174 in generate_new_examples
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1567 in _run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 994 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1415 in run_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 2222 in wrapped_test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 167 in pytest_pyfunc_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 1707 in runtest
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 184 in pytest_runtest_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 250 in <lambda>
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 361 in from_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 249 in call_and_report
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 139 in runtestprotocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 408 in pytest_runtestloop
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 384 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 330 in wrap_session
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 377 in pytest_cmdline_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 229 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253 in _console_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pytest/__main__.py", line 9 in <module>
-  File "<frozen runpy>", line 88 in _run_code
-  File "<frozen runpy>", line 203 in _run_module_as_main
+op = <module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>
+dtype = dtype('uint16')
 
-Current thread's C stack trace (most recent call first):
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _Py_DumpStack+0x48 [0x104447a54]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_dump_c_stack+0x58 [0x10445c914]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_fatal_error+0x17c [0x10445c854]
-  Binary file "/usr/lib/system/libsystem_platform.dylib", at _sigtramp+0x38 [0x181693744]
-  Binary file "/opt/homebrew/Cellar/mlx-c/0.6.0_3/lib/libmlxc.dylib", at mlx_array_data_uint8+0x24 [0x145549ea0]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx18TranslationContext7CopyOutERKNS_6OutRefE+0x264 [0x145411720]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx18TranslationContext7ExecuteEv+0x218 [0x145411c44]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx7RunPlanERNS_4PlanERN3Ort13KernelContextERNSt3__112basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEE+0x44 [0x145412150]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN12_GLOBAL__N_123SubgraphNodeComputeInfo11ComputeImplEP18OrtNodeComputeInfoPvP16OrtKernelContext+0x34 [0x14540c21c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNSt3__110__function6__funcIZN11onnxruntime23PluginExecutionProvider7CompileERKNS_6vectorINS2_18IExecutionProvider17FusedNodeAndGraphENS_9allocatorIS6_EEEERNS4_INS2_15NodeComputeInfoENS7_ISC_EEEEE3$_2NS7_ISG_EEFNS2_6common6StatusEPvPK6OrtApiP16OrtKernelContextEEclEOSK_OSN_OSP_+0x24 [0x152525ec8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNK11onnxruntime14FunctionKernel7ComputeEPNS_15OpKernelContextE+0x78 [0x152ec2c38]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime13ExecuteKernelERNS_22StreamExecutionContextEmmRKbRNS_12SessionScopeE+0x160 [0x152ef9c40]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16LaunchKernelStep7ExecuteERNS_22StreamExecutionContextEmRNS_12SessionScopeERKbRb+0x30 [0x152eb3098]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime8RunSinceEmRNS_22StreamExecutionContextERNS_12SessionScopeERKbm+0x168 [0x152f24974]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime14ExecuteThePlanERKNS_12SessionStateEN3gsl4spanIKiLm18446744073709551615EEENS4_IK8OrtValueLm18446744073709551615EEES6_RNSt3__16vectorIS7_NSA_9allocatorIS7_EEEERKNSA_13unordered_mapImNSA_8functionIFNS_6common6StatusERKNS_11TensorShapeERK9OrtDeviceRS7_RbEEENSA_4hashImEENSA_8equal_toImEENSC_INSA_4pairIKmST_EEEEEERKNS_7logging6LoggerEPKNS_22DeviceStreamCollectionERKbbbPNS_9profiling8ProfilerE+0x248 [0x152efac54]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utilsL16ExecuteGraphImplERKNS_12SessionStateERKNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS9_NSC_9allocatorIS9_EEEERKNSC_13unordered_mapImNSC_8functionIFNS_6common6StatusERKNS_11TensorShapeERK9OrtDeviceRS9_RbEEENSC_4hashImEENSC_8equal_toImEENSE_INSC_4pairIKmSV_EEEEEE13ExecutionModeRKbRKNS_7logging6LoggerEPNS_22DeviceStreamCollectionEbPNS_6StreamEPNS_9profiling8ProfilerE+0x950 [0x152f514bc]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utils12ExecuteGraphERKNS_12SessionStateERNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS8_NSB_9allocatorIS8_EEEE13ExecutionModeRKbRKNS_7logging6LoggerERNS_28DeviceStreamCollectionHolderEbPNS_6StreamEPNS_9profiling8ProfilerE+0x32c [0x152f509b0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utils12ExecuteGraphERKNS_12SessionStateERNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS8_NSB_9allocatorIS8_EEEE13ExecutionModeRK13OrtRunOptionsRNS_28DeviceStreamCollectionHolderERKNS_7logging6LoggerEPNS_9profiling8ProfilerE+0x2c [0x152f5238c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession7RunImplERK13OrtRunOptionsN3gsl4spanIKNSt3__112basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEELm18446744073709551615EEENS5_IK8OrtValueLm18446744073709551615EEESE_PNS6_6vectorISF_NSA_ISF_EEEEPKNSI_I9OrtDeviceNSA_ISM_EEEEi+0x12a0 [0x1524953a4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession3RunERK13OrtRunOptionsRKNSt3__113unordered_mapINS4_12basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEE8OrtValueNS4_4hashISB_EENS4_8equal_toISB_EENS9_INS4_4pairIKSB_SC_EEEEEEN3gsl4spanISI_Lm18446744073709551615EEEPNS4_6vectorISC_NS9_ISC_EEEE+0x1d4 [0x152497fe8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession3RunERKNSt3__113unordered_mapINS1_12basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE8OrtValueNS1_4hashIS8_EENS1_8equal_toIS8_EENS6_INS1_4pairIKS8_S9_EEEEEEN3gsl4spanISF_Lm18446744073709551615EEEPNS1_6vectorIS9_NS6_IS9_EEEE+0xd8 [0x152497dc4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNO8pybind116detail15argument_loaderIJPN11onnxruntime6python18PyInferenceSessionERKNSt3__16vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSB_ISD_EEEERKNS6_3mapISD_KNS_6objectENS6_4lessISD_EENSB_INS6_4pairIKSD_SK_EEEEEEP13OrtRunOptionsEE4callINS_4listENS0_9void_typeERZNS3_16addObjectMethodsERNS_7module_ENS6_8functionIFvPNS2_16InferenceSessionESH_RKNS6_13unordered_mapISD_NS15_ISD_SD_NS6_4hashISD_EENS6_8equal_toISD_EENSB_INSN_ISO_SD_EEEEEES17_S19_NSB_INSN_ISO_S1C_EEEEEEEEEE4$_94EENS6_9enable_ifIXntsr3std7is_voidIT_EE5valueES1N_E4typeEOT1_+0x4b4 [0x15242ca28]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZZN8pybind1112cpp_function10initializeIZN11onnxruntime6python16addObjectMethodsERNS_7module_ENSt3__18functionIFvPNS2_16InferenceSessionERKNS6_6vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSE_ISG_EEEERKNS6_13unordered_mapISG_NSL_ISG_SG_NS6_4hashISG_EENS6_8equal_toISG_EENSE_INS6_4pairIKSG_SG_EEEEEESN_SP_NSE_INSQ_ISR_SU_EEEEEEEEEE4$_94NS_4listEJPNS3_18PyInferenceSessionESK_RKNS6_3mapISG_KNS_6objectENS6_4lessISG_EENSE_INSQ_ISR_S18_EEEEEEP13OrtRunOptionsEJNS_4nameENS_9is_methodENS_7siblingEEEEvOT_PFT0_DpT1_EDpRKT2_ENUlRNS_6detail13function_callEE_8__invokeES1Y_+0x94 [0x15242c3d4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN8pybind1112cpp_function10dispatcherEP7_objectPKS2_mS2_+0xd10 [0x152335828]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL+0x13c [0x10438a390]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x104204520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyObject_Call_Prepend+0x128 [0x10420553c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at slot_tp_call+0x178 [0x1042bf4d0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at PyObject_Vectorcall+0x17c [0x104202f94]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL_KW+0x2c8 [0x10438be90]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x104204520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyObject_Call_Prepend+0x128 [0x10420553c]
-  <truncated rest of calls>
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
 
-Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, google._upb._message, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand (total: 12)
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+    sess = ort.InferenceSession(
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
+    self._create_inference_session(providers, provider_options, disabled_optimizers)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x11f96de50>
+providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
+provider_options = [{}, {}], disabled_optimizers = set()
+
+    def _create_inference_session(self, providers, provider_options, disabled_optimizers=None):
+        available_providers = C.get_available_providers()
+    
+        # Validate that TensorrtExecutionProvider and NvTensorRTRTXExecutionProvider are not both specified
+        if providers:
+            has_tensorrt = any(
+                provider == "TensorrtExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                for provider in providers
+            )
+            has_tensorrt_rtx = any(
+                provider == "NvTensorRTRTXExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                for provider in providers
+            )
+            if has_tensorrt and has_tensorrt_rtx:
+                raise ValueError(
+                    "Cannot enable both 'TensorrtExecutionProvider' and 'NvTensorRTRTXExecutionProvider' "
+                    "in the same session."
+                )
+        # Tensorrt and TensorRT RTX can fall back to CUDA if it's explicitly assigned. All others fall back to CPU.
+        if "NvTensorRTRTXExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "NvTensorRTRTXExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        elif "TensorrtExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "TensorrtExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        else:
+            self._fallback_providers = ["CPUExecutionProvider"]
+    
+        # validate providers and provider_options before other initialization
+        providers, provider_options = check_and_normalize_provider_args(
+            providers, provider_options, available_providers
+        )
+    
+        # Print a warning if user passed providers to InferenceSession() but the SessionOptions instance
+        # already has provider information (e.g., via add_provider_for_devices()). The providers specified
+        # here will take precedence.
+        if self._sess_options is not None and (providers or provider_options) and self._sess_options.has_providers():
+            warnings.warn(
+                "Specified 'providers'/'provider_options' when creating InferenceSession but SessionOptions has "
+                "already been configured with providers. InferenceSession will only use the providers "
+                "passed to InferenceSession()."
+            )
+    
+        session_options = self._sess_options if self._sess_options else C.get_default_session_options()
+    
+        self._register_ep_custom_ops(session_options, providers, provider_options, available_providers)
+    
+        if self._model_path:
+            sess = C.InferenceSession(session_options, self._model_path, True, self._read_config_from_model)
+        else:
+            sess = C.InferenceSession(session_options, self._model_bytes, False, self._read_config_from_model)
+    
+        if disabled_optimizers is None:
+            disabled_optimizers = set()
+        elif not isinstance(disabled_optimizers, set):
+            # convert to set. assumes iterable
+            disabled_optimizers = set(disabled_optimizers)
+    
+        # initialize the C++ InferenceSession
+>       sess.initialize_session(providers, provider_options, disabled_optimizers)
+E       onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+E       
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>,
+E           dtype=dtype('uint16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'data': array([0], dtype=uint16),
+E         'pads': array([0, 0])},
+E        attribute_kwargs={'mode': 'reflect'},
+E        spox_fun=pad)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/manipulation_functions.py:231
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:529
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:634: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:07.870 python[21072:3171913] 2026-07-13 18:21:07.870575 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:07.925 python[21072:3171913] 2026-07-13 18:21:07.925194 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:07.946 python[21072:3171913] 2026-07-13 18:21:07.946839 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:07.967 python[21072:3171913] 2026-07-13 18:21:07.967865 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:07.989 python[21072:3171913] 2026-07-13 18:21:07.989534 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.010 python[21072:3171913] 2026-07-13 18:21:08.010263 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.031 python[21072:3171913] 2026-07-13 18:21:08.031158 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.051 python[21072:3171913] 2026-07-13 18:21:08.051716 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.086 python[21072:3171913] 2026-07-13 18:21:08.086137 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.128 python[21072:3171913] 2026-07-13 18:21:08.128456 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+____________________________ test_Pad_21[v21-int16] ____________________________
+
+op = <module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>
+dtype = dtype('int16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+    sess = ort.InferenceSession(
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
+    self._create_inference_session(providers, provider_options, disabled_optimizers)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x11f96f110>
+providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
+provider_options = [{}, {}], disabled_optimizers = set()
+
+    def _create_inference_session(self, providers, provider_options, disabled_optimizers=None):
+        available_providers = C.get_available_providers()
+    
+        # Validate that TensorrtExecutionProvider and NvTensorRTRTXExecutionProvider are not both specified
+        if providers:
+            has_tensorrt = any(
+                provider == "TensorrtExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                for provider in providers
+            )
+            has_tensorrt_rtx = any(
+                provider == "NvTensorRTRTXExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                for provider in providers
+            )
+            if has_tensorrt and has_tensorrt_rtx:
+                raise ValueError(
+                    "Cannot enable both 'TensorrtExecutionProvider' and 'NvTensorRTRTXExecutionProvider' "
+                    "in the same session."
+                )
+        # Tensorrt and TensorRT RTX can fall back to CUDA if it's explicitly assigned. All others fall back to CPU.
+        if "NvTensorRTRTXExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "NvTensorRTRTXExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        elif "TensorrtExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "TensorrtExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        else:
+            self._fallback_providers = ["CPUExecutionProvider"]
+    
+        # validate providers and provider_options before other initialization
+        providers, provider_options = check_and_normalize_provider_args(
+            providers, provider_options, available_providers
+        )
+    
+        # Print a warning if user passed providers to InferenceSession() but the SessionOptions instance
+        # already has provider information (e.g., via add_provider_for_devices()). The providers specified
+        # here will take precedence.
+        if self._sess_options is not None and (providers or provider_options) and self._sess_options.has_providers():
+            warnings.warn(
+                "Specified 'providers'/'provider_options' when creating InferenceSession but SessionOptions has "
+                "already been configured with providers. InferenceSession will only use the providers "
+                "passed to InferenceSession()."
+            )
+    
+        session_options = self._sess_options if self._sess_options else C.get_default_session_options()
+    
+        self._register_ep_custom_ops(session_options, providers, provider_options, available_providers)
+    
+        if self._model_path:
+            sess = C.InferenceSession(session_options, self._model_path, True, self._read_config_from_model)
+        else:
+            sess = C.InferenceSession(session_options, self._model_bytes, False, self._read_config_from_model)
+    
+        if disabled_optimizers is None:
+            disabled_optimizers = set()
+        elif not isinstance(disabled_optimizers, set):
+            # convert to set. assumes iterable
+            disabled_optimizers = set(disabled_optimizers)
+    
+        # initialize the C++ InferenceSession
+>       sess.initialize_session(providers, provider_options, disabled_optimizers)
+E       onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+E       
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>,
+E           dtype=dtype('int16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'data': array([0], dtype=int16),
+E         'pads': array([0, 0])},
+E        attribute_kwargs={'mode': 'reflect'},
+E        spox_fun=pad)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/onnx_tests/manipulation_functions.py:231
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:529
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:634: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:08.392 python[21072:3171913] 2026-07-13 18:21:08.392731 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.417 python[21072:3171913] 2026-07-13 18:21:08.417577 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.440 python[21072:3171913] 2026-07-13 18:21:08.440070 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.460 python[21072:3171913] 2026-07-13 18:21:08.459966 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.481 python[21072:3171913] 2026-07-13 18:21:08.481141 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.502 python[21072:3171913] 2026-07-13 18:21:08.502359 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.523 python[21072:3171913] 2026-07-13 18:21:08.523432 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.543 python[21072:3171913] 2026-07-13 18:21:08.543829 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.577 python[21072:3171913] 2026-07-13 18:21:08.577108 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:08.647 python[21072:3171913] 2026-07-13 18:21:08.647607 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+_____________________________ test_Pad_21[v21-<U0] _____________________________
+
+op = <module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>
+dtype = dtype('<U')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+    sess = ort.InferenceSession(
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
+    self._create_inference_session(providers, provider_options, disabled_optimizers)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x12b079d60>
+providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
+provider_options = [{}, {}], disabled_optimizers = set()
+
+    def _create_inference_session(self, providers, provider_options, disabled_optimizers=None):
+        available_providers = C.get_available_providers()
+    
+        # Validate that TensorrtExecutionProvider and NvTensorRTRTXExecutionProvider are not both specified
+        if providers:
+            has_tensorrt = any(
+                provider == "TensorrtExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                for provider in providers
+            )
+            has_tensorrt_rtx = any(
+                provider == "NvTensorRTRTXExecutionProvider"
+                or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                for provider in providers
+            )
+            if has_tensorrt and has_tensorrt_rtx:
+                raise ValueError(
+                    "Cannot enable both 'TensorrtExecutionProvider' and 'NvTensorRTRTXExecutionProvider' "
+                    "in the same session."
+                )
+        # Tensorrt and TensorRT RTX can fall back to CUDA if it's explicitly assigned. All others fall back to CPU.
+        if "NvTensorRTRTXExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "NvTensorRTRTXExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "NvTensorRTRTXExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        elif "TensorrtExecutionProvider" in available_providers:
+            if (
+                providers
+                and any(
+                    provider == "CUDAExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider")
+                    for provider in providers
+                )
+                and any(
+                    provider == "TensorrtExecutionProvider"
+                    or (isinstance(provider, tuple) and provider[0] == "TensorrtExecutionProvider")
+                    for provider in providers
+                )
+            ):
+                self._fallback_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                self._fallback_providers = ["CPUExecutionProvider"]
+        else:
+            self._fallback_providers = ["CPUExecutionProvider"]
+    
+        # validate providers and provider_options before other initialization
+        providers, provider_options = check_and_normalize_provider_args(
+            providers, provider_options, available_providers
+        )
+    
+        # Print a warning if user passed providers to InferenceSession() but the SessionOptions instance
+        # already has provider information (e.g., via add_provider_for_devices()). The providers specified
+        # here will take precedence.
+        if self._sess_options is not None and (providers or provider_options) and self._sess_options.has_providers():
+            warnings.warn(
+                "Specified 'providers'/'provider_options' when creating InferenceSession but SessionOptions has "
+                "already been configured with providers. InferenceSession will only use the providers "
+                "passed to InferenceSession()."
+            )
+    
+        session_options = self._sess_options if self._sess_options else C.get_default_session_options()
+    
+        self._register_ep_custom_ops(session_options, providers, provider_options, available_providers)
+    
+        if self._model_path:
+            sess = C.InferenceSession(session_options, self._model_path, True, self._read_config_from_model)
+        else:
+            sess = C.InferenceSession(session_options, self._model_bytes, False, self._read_config_from_model)
+    
+        if disabled_optimizers is None:
+            disabled_optimizers = set()
+        elif not isinstance(disabled_optimizers, set):
+            # convert to set. assumes iterable
+            disabled_optimizers = set(disabled_optimizers)
+    
+        # initialize the C++ InferenceSession
+>       sess.initialize_session(providers, provider_options, disabled_optimizers)
+E       onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+E       
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v21' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v21.py'>,
+E           dtype=dtype('<U'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'data': array([], dtype='<U1'),
+E         'pads': array([0, 0])},
+E        attribute_kwargs={'mode': 'constant'},
+E        spox_fun=pad)
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:634: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:09.087 python[21072:3171913] 2026-07-13 18:21:09.087081 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.109 python[21072:3171913] 2026-07-13 18:21:09.109589 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.132 python[21072:3171913] 2026-07-13 18:21:09.132025 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.153 python[21072:3171913] 2026-07-13 18:21:09.153791 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.175 python[21072:3171913] 2026-07-13 18:21:09.175502 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.196 python[21072:3171913] 2026-07-13 18:21:09.196685 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.217 python[21072:3171913] 2026-07-13 18:21:09.217318 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.238 python[21072:3171913] 2026-07-13 18:21:09.238863 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.261 python[21072:3171913] 2026-07-13 18:21:09.261665 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.282 python[21072:3171913] 2026-07-13 18:21:09.282160 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.301 python[21072:3171913] 2026-07-13 18:21:09.301905 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+2026-07-13 18:21:09.327 python[21072:3171913] 2026-07-13 18:21:09.327385 [E:onnxruntime:, inference_session.cc:2805 operator()] Exception during initialization: /Users/cloudtest/vss/_work/1/s/onnxruntime/core/optimizer/transformer_memcpy.cc:254 bool onnxruntime::TransformerMemcpyImpl::IsNodeCompatibleWithProvider(const onnxruntime::Node &) const !node_provider_type.empty() was false. Provider type for Pad node with name 'Pad_0' is not set.
+=========================== short test summary info ============================
+FAILED tests/test_manipulation_functions.py::test_Pad_21[v21-uint16] - onnxru...
+FAILED tests/test_manipulation_functions.py::test_Pad_21[v21-int16] - onnxrun...
+FAILED tests/test_manipulation_functions.py::test_Pad_21[v21-<U0] - onnxrunti...
+3 failed, 10 passed, 1185 deselected in 2.24s

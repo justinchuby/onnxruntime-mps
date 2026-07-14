@@ -1,89 +1,371 @@
-Fatal Python error: Segmentation fault
+..FFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+_________________________ test_MatMul_13[v17-float64] __________________________
 
-Current thread 0x00000001ed809e80 (most recent call first):
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 320 in run
-  File "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py", line 144 in run_mlx
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/test_linalg.py", line 25 in test_MatMul_13
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1004 in test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/test_linalg.py", line 16 in test_MatMul_13
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1107 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 824 in default_executor
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1150 in execute_once
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1212 in _execute_once_for_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 434 in __stoppable_test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 575 in test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1325 in generate_new_examples
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1567 in _run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 994 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1415 in run_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 2222 in wrapped_test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/test_linalg.py", line 16 in test_MatMul_13
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 167 in pytest_pyfunc_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 1707 in runtest
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 184 in pytest_runtest_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 250 in <lambda>
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 361 in from_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 249 in call_and_report
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 139 in runtestprotocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 408 in pytest_runtestloop
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 384 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 330 in wrap_session
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 377 in pytest_cmdline_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 229 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253 in _console_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pytest/__main__.py", line 9 in <module>
-  File "<frozen runpy>", line 88 in _run_code
-  File "<frozen runpy>", line 203 in _run_module_as_main
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float64')
 
-Current thread's C stack trace (most recent call first):
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _Py_DumpStack+0x48 [0x101297a54]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_dump_c_stack+0x58 [0x1012ac914]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_fatal_error+0x17c [0x1012ac854]
-  Binary file "/usr/lib/system/libsystem_platform.dylib", at _sigtramp+0x38 [0x181693744]
-  Binary file "/opt/homebrew/Cellar/mlx-c/0.6.0_3/lib/libmlxc.dylib", at mlx_array_data_float16+0x24 [0x163e06840]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx18TranslationContext7CopyOutERKNS_6OutRefE+0x244 [0x163a49700]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx18TranslationContext7ExecuteEv+0x218 [0x163a49c44]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx7RunPlanERNS_4PlanERN3Ort13KernelContextERNSt3__112basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEE+0x44 [0x163a4a150]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN12_GLOBAL__N_123SubgraphNodeComputeInfo11ComputeImplEP18OrtNodeComputeInfoPvP16OrtKernelContext+0x34 [0x163a4421c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNSt3__110__function6__funcIZN11onnxruntime23PluginExecutionProvider7CompileERKNS_6vectorINS2_18IExecutionProvider17FusedNodeAndGraphENS_9allocatorIS6_EEEERNS4_INS2_15NodeComputeInfoENS7_ISC_EEEEE3$_2NS7_ISG_EEFNS2_6common6StatusEPvPK6OrtApiP16OrtKernelContextEEclEOSK_OSN_OSP_+0x24 [0x165f5dec8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNK11onnxruntime14FunctionKernel7ComputeEPNS_15OpKernelContextE+0x78 [0x1668fac38]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime13ExecuteKernelERNS_22StreamExecutionContextEmmRKbRNS_12SessionScopeE+0x160 [0x166931c40]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16LaunchKernelStep7ExecuteERNS_22StreamExecutionContextEmRNS_12SessionScopeERKbRb+0x30 [0x1668eb098]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime8RunSinceEmRNS_22StreamExecutionContextERNS_12SessionScopeERKbm+0x168 [0x16695c974]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime14ExecuteThePlanERKNS_12SessionStateEN3gsl4spanIKiLm18446744073709551615EEENS4_IK8OrtValueLm18446744073709551615EEES6_RNSt3__16vectorIS7_NSA_9allocatorIS7_EEEERKNSA_13unordered_mapImNSA_8functionIFNS_6common6StatusERKNS_11TensorShapeERK9OrtDeviceRS7_RbEEENSA_4hashImEENSA_8equal_toImEENSC_INSA_4pairIKmST_EEEEEERKNS_7logging6LoggerEPKNS_22DeviceStreamCollectionERKbbbPNS_9profiling8ProfilerE+0x248 [0x166932c54]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utilsL16ExecuteGraphImplERKNS_12SessionStateERKNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS9_NSC_9allocatorIS9_EEEERKNSC_13unordered_mapImNSC_8functionIFNS_6common6StatusERKNS_11TensorShapeERK9OrtDeviceRS9_RbEEENSC_4hashImEENSC_8equal_toImEENSE_INSC_4pairIKmSV_EEEEEE13ExecutionModeRKbRKNS_7logging6LoggerEPNS_22DeviceStreamCollectionEbPNS_6StreamEPNS_9profiling8ProfilerE+0x950 [0x1669894bc]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utils12ExecuteGraphERKNS_12SessionStateERNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS8_NSB_9allocatorIS8_EEEE13ExecutionModeRKbRKNS_7logging6LoggerERNS_28DeviceStreamCollectionHolderEbPNS_6StreamEPNS_9profiling8ProfilerE+0x32c [0x1669889b0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime5utils12ExecuteGraphERKNS_12SessionStateERNS_19FeedsFetchesManagerEN3gsl4spanIK8OrtValueLm18446744073709551615EEERNSt3__16vectorIS8_NSB_9allocatorIS8_EEEE13ExecutionModeRK13OrtRunOptionsRNS_28DeviceStreamCollectionHolderERKNS_7logging6LoggerEPNS_9profiling8ProfilerE+0x2c [0x16698a38c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession7RunImplERK13OrtRunOptionsN3gsl4spanIKNSt3__112basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEELm18446744073709551615EEENS5_IK8OrtValueLm18446744073709551615EEESE_PNS6_6vectorISF_NSA_ISF_EEEEPKNSI_I9OrtDeviceNSA_ISM_EEEEi+0x12a0 [0x165ecd3a4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession3RunERK13OrtRunOptionsRKNSt3__113unordered_mapINS4_12basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEE8OrtValueNS4_4hashISB_EENS4_8equal_toISB_EENS9_INS4_4pairIKSB_SC_EEEEEEN3gsl4spanISI_Lm18446744073709551615EEEPNS4_6vectorISC_NS9_ISC_EEEE+0x1d4 [0x165ecffe8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession3RunERKNSt3__113unordered_mapINS1_12basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE8OrtValueNS1_4hashIS8_EENS1_8equal_toIS8_EENS6_INS1_4pairIKS8_S9_EEEEEEN3gsl4spanISF_Lm18446744073709551615EEEPNS1_6vectorIS9_NS6_IS9_EEEE+0xd8 [0x165ecfdc4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNO8pybind116detail15argument_loaderIJPN11onnxruntime6python18PyInferenceSessionERKNSt3__16vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSB_ISD_EEEERKNS6_3mapISD_KNS_6objectENS6_4lessISD_EENSB_INS6_4pairIKSD_SK_EEEEEEP13OrtRunOptionsEE4callINS_4listENS0_9void_typeERZNS3_16addObjectMethodsERNS_7module_ENS6_8functionIFvPNS2_16InferenceSessionESH_RKNS6_13unordered_mapISD_NS15_ISD_SD_NS6_4hashISD_EENS6_8equal_toISD_EENSB_INSN_ISO_SD_EEEEEES17_S19_NSB_INSN_ISO_S1C_EEEEEEEEEE4$_94EENS6_9enable_ifIXntsr3std7is_voidIT_EE5valueES1N_E4typeEOT1_+0x4b4 [0x165e64a28]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZZN8pybind1112cpp_function10initializeIZN11onnxruntime6python16addObjectMethodsERNS_7module_ENSt3__18functionIFvPNS2_16InferenceSessionERKNS6_6vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSE_ISG_EEEERKNS6_13unordered_mapISG_NSL_ISG_SG_NS6_4hashISG_EENS6_8equal_toISG_EENSE_INS6_4pairIKSG_SG_EEEEEESN_SP_NSE_INSQ_ISR_SU_EEEEEEEEEE4$_94NS_4listEJPNS3_18PyInferenceSessionESK_RKNS6_3mapISG_KNS_6objectENS6_4lessISG_EENSE_INSQ_ISR_S18_EEEEEEP13OrtRunOptionsEJNS_4nameENS_9is_methodENS_7siblingEEEEvOT_PFT0_DpT1_EDpRKT2_ENUlRNS_6detail13function_callEE_8__invokeES1Y_+0x94 [0x165e643d4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN8pybind1112cpp_function10dispatcherEP7_objectPKS2_mS2_+0xd10 [0x165d6d828]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL+0x13c [0x1011da390]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x101054520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyObject_Call_Prepend+0x128 [0x10105553c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at slot_tp_call+0x178 [0x10110f4d0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at PyObject_Vectorcall+0x17c [0x101052f94]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL_KW+0x2c8 [0x1011dbe90]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x101054520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyObject_Call_Prepend+0x128 [0x10105553c]
-  <truncated rest of calls>
+    @given(data=st.data())
+>   @pytest.mark.parametrize("op,dtype", dtype_params("MatMul", 13), ids=format)
+                   ^^^^^^^^^^^^
 
-Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, google._upb._message, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand (total: 12)
+tests/test_linalg.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_linalg.py:25: in test_MatMul_13
+    (candidate,) = run_candidate(model).values()
+                   ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x13dfb6300>
+output_names = ['res'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+E           Falsifying example: test_MatMul_13(
+E               op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E               dtype=dtype('float64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs=[array([[[0.]]]),
+E             array([], shape=(0, 1, 1), dtype=float64)],
+E            attribute_kwargs={},
+E            spox_fun=matmul)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:51.575 python[21258:3199116] 2026-07-13 18:21:51.574966 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:51.620 python[21258:3199116] 2026-07-13 18:21:51.620373 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:51.636 python[21258:3199116] 2026-07-13 18:21:51.636910 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:51.658 python[21258:3199116] 2026-07-13 18:21:51.658941 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:51.675 python[21258:3199116] 2026-07-13 18:21:51.675880 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:51.700 python[21258:3199116] 2026-07-13 18:21:51.700526 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:51.757 python[21258:3199116] 2026-07-13 18:21:51.757831 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:51.781 python[21258:3199116] 2026-07-13 18:21:51.781357 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:51.798 python[21258:3199116] 2026-07-13 18:21:51.798377 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:51.857 python[21258:3199116] 2026-07-13 18:21:51.857008 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:142 Compute left operand cannot broadcast on dim 0
+2026-07-13 18:21:51.898 python[21258:3199116] 2026-07-13 18:21:51.898811 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:51.981 python[21258:3199116] 2026-07-13 18:21:51.981157 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+__________________________ test_MatMul_13[v17-uint32] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize("op,dtype", dtype_params("MatMul", 13), ids=format)
+                   ^^^^^^^^^^^^
+
+tests/test_linalg.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_linalg.py:25: in test_MatMul_13
+    (candidate,) = run_candidate(model).values()
+                   ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1398c74d0>
+output_names = ['res'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+E           Falsifying example: test_MatMul_13(
+E               op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E               dtype=dtype('uint32'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs=[array([[[0]]], dtype=uint32),
+E             array([], shape=(0, 1, 1), dtype=uint32)],
+E            attribute_kwargs={},
+E            spox_fun=matmul)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:52.014 python[21258:3199116] 2026-07-13 18:21:52.014380 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.030 python[21258:3199116] 2026-07-13 18:21:52.030833 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.047 python[21258:3199116] 2026-07-13 18:21:52.047698 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.063 python[21258:3199116] 2026-07-13 18:21:52.063919 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.112 python[21258:3199116] 2026-07-13 18:21:52.112865 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.128 python[21258:3199116] 2026-07-13 18:21:52.128556 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.146 python[21258:3199116] 2026-07-13 18:21:52.146257 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:52.167 python[21258:3199116] 2026-07-13 18:21:52.167824 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:52.215 python[21258:3199116] 2026-07-13 18:21:52.215505 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.238 python[21258:3199116] 2026-07-13 18:21:52.238817 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.255 python[21258:3199116] 2026-07-13 18:21:52.255306 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.270 python[21258:3199116] 2026-07-13 18:21:52.270775 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.360 python[21258:3199116] 2026-07-13 18:21:52.359963 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:142 Compute left operand cannot broadcast on dim 0
+2026-07-13 18:21:52.401 python[21258:3199116] 2026-07-13 18:21:52.401377 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.482 python[21258:3199116] 2026-07-13 18:21:52.482210 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+__________________________ test_MatMul_13[v17-uint64] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize("op,dtype", dtype_params("MatMul", 13), ids=format)
+                   ^^^^^^^^^^^^
+
+tests/test_linalg.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_linalg.py:25: in test_MatMul_13
+    (candidate,) = run_candidate(model).values()
+                   ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x13dfb74d0>
+output_names = ['res'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+E           Falsifying example: test_MatMul_13(
+E               op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E               dtype=dtype('uint64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs=[array([[[0]]], dtype=uint64),
+E             array([], shape=(0, 1, 1), dtype=uint64)],
+E            attribute_kwargs={},
+E            spox_fun=matmul)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:52.515 python[21258:3199116] 2026-07-13 18:21:52.515735 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.532 python[21258:3199116] 2026-07-13 18:21:52.532908 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.549 python[21258:3199116] 2026-07-13 18:21:52.548993 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.565 python[21258:3199116] 2026-07-13 18:21:52.565647 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.582 python[21258:3199116] 2026-07-13 18:21:52.582094 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.599 python[21258:3199116] 2026-07-13 18:21:52.599464 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:52.615 python[21258:3199116] 2026-07-13 18:21:52.615951 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:52.636 python[21258:3199116] 2026-07-13 18:21:52.636312 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:52.683 python[21258:3199116] 2026-07-13 18:21:52.682990 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.705 python[21258:3199116] 2026-07-13 18:21:52.705700 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.722 python[21258:3199116] 2026-07-13 18:21:52.722022 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.738 python[21258:3199116] 2026-07-13 18:21:52.738302 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.829 python[21258:3199116] 2026-07-13 18:21:52.828956 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:142 Compute left operand cannot broadcast on dim 0
+2026-07-13 18:21:52.904 python[21258:3199116] 2026-07-13 18:21:52.904330 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:52.995 python[21258:3199116] 2026-07-13 18:21:52.994969 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+__________________________ test_MatMul_13[v17-int32] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize("op,dtype", dtype_params("MatMul", 13), ids=format)
+                   ^^^^^^^^^^^^
+
+tests/test_linalg.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_linalg.py:25: in test_MatMul_13
+    (candidate,) = run_candidate(model).values()
+                   ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x13e2da990>
+output_names = ['res'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+E           Falsifying example: test_MatMul_13(
+E               op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E               dtype=dtype('int32'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs=[array([[[0]]], dtype=int32),
+E             array([], shape=(0, 1, 1), dtype=int32)],
+E            attribute_kwargs={},
+E            spox_fun=matmul)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:53.029 python[21258:3199116] 2026-07-13 18:21:53.029690 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.049 python[21258:3199116] 2026-07-13 18:21:53.049164 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.066 python[21258:3199116] 2026-07-13 18:21:53.066219 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.083 python[21258:3199116] 2026-07-13 18:21:53.083676 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.100 python[21258:3199116] 2026-07-13 18:21:53.100917 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.117 python[21258:3199116] 2026-07-13 18:21:53.117330 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.134 python[21258:3199116] 2026-07-13 18:21:53.134359 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:53.156 python[21258:3199116] 2026-07-13 18:21:53.156514 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:53.201 python[21258:3199116] 2026-07-13 18:21:53.201296 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.224 python[21258:3199116] 2026-07-13 18:21:53.224575 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.242 python[21258:3199116] 2026-07-13 18:21:53.242019 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.258 python[21258:3199116] 2026-07-13 18:21:53.258348 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.342 python[21258:3199116] 2026-07-13 18:21:53.342627 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:142 Compute left operand cannot broadcast on dim 0
+2026-07-13 18:21:53.385 python[21258:3199116] 2026-07-13 18:21:53.385148 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.465 python[21258:3199116] 2026-07-13 18:21:53.465855 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+__________________________ test_MatMul_13[v17-int64] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize("op,dtype", dtype_params("MatMul", 13), ids=format)
+                   ^^^^^^^^^^^^
+
+tests/test_linalg.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_linalg.py:25: in test_MatMul_13
+    (candidate,) = run_candidate(model).values()
+                   ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x13dfb4aa0>
+output_names = ['res'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+E           Falsifying example: test_MatMul_13(
+E               op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E               dtype=dtype('int64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs=[array([[[0]]]),
+E             array([], shape=(0, 1, 1), dtype=int64)],
+E            attribute_kwargs={},
+E            spox_fun=matmul)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:53.498 python[21258:3199116] 2026-07-13 18:21:53.498612 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.516 python[21258:3199116] 2026-07-13 18:21:53.516531 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.532 python[21258:3199116] 2026-07-13 18:21:53.532462 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.549 python[21258:3199116] 2026-07-13 18:21:53.549906 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.566 python[21258:3199116] 2026-07-13 18:21:53.566736 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.584 python[21258:3199116] 2026-07-13 18:21:53.584043 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 3
+2026-07-13 18:21:53.637 python[21258:3199116] 2026-07-13 18:21:53.637225 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:53.658 python[21258:3199116] 2026-07-13 18:21:53.658018 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 2
+2026-07-13 18:21:53.702 python[21258:3199116] 2026-07-13 18:21:53.702722 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.725 python[21258:3199116] 2026-07-13 18:21:53.725362 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.741 python[21258:3199116] 2026-07-13 18:21:53.741134 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.757 python[21258:3199116] 2026-07-13 18:21:53.757675 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.846 python[21258:3199116] 2026-07-13 18:21:53.846515 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:142 Compute left operand cannot broadcast on dim 0
+2026-07-13 18:21:53.889 python[21258:3199116] 2026-07-13 18:21:53.889730 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+2026-07-13 18:21:53.974 python[21258:3199116] 2026-07-13 18:21:53.974828 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MatMul node. Name:'MatMul_0' Status Message: matmul_helper.h:144 Compute right operand cannot broadcast on dim 0
+=========================== short test summary info ============================
+FAILED tests/test_linalg.py::test_MatMul_13[v17-float64] - onnxruntime.capi.o...
+FAILED tests/test_linalg.py::test_MatMul_13[v17-uint32] - onnxruntime.capi.on...
+FAILED tests/test_linalg.py::test_MatMul_13[v17-uint64] - onnxruntime.capi.on...
+FAILED tests/test_linalg.py::test_MatMul_13[v17-int32] - onnxruntime.capi.onn...
+FAILED tests/test_linalg.py::test_MatMul_13[v17-int64] - onnxruntime.capi.onn...
+5 failed, 2 passed, 1191 deselected in 3.24s

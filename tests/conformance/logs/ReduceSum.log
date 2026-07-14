@@ -2,7 +2,7 @@
 =================================== FAILURES ===================================
 ________________________ test_ReduceSum_13[v17-uint64] _________________________
 
-self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x14ef03a70>
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x146d07a70>
 output_names = ['res'], input_feed = {}, run_options = None
 
     def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
@@ -45,7 +45,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 tests/utils.py:79: in test_fun
     candidate = run_candidate(model)
                 ^^^^^^^^^^^^^^^^^^^^
-../onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
     result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
                                                  ^^^^^^^^^^^^^^^^^^
 .pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:325: in run
@@ -56,7 +56,7 @@ tests/utils.py:79: in test_fun
     self._create_inference_session(providers, provider_options)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x14ef03a70>
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x146d07a70>
 providers = ['CPUExecutionProvider'], provider_options = [{}]
 disabled_optimizers = set()
 
@@ -188,18 +188,18 @@ Falling back to ['CPUExecutionProvider'] and retrying.
 EP Error: [ONNXRuntimeError] : 11 : EP_FAIL : Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced using ['MLXExecutionProvider', 'CPUExecutionProvider']
 Falling back to ['CPUExecutionProvider'] and retrying.
 ----------------------------- Captured stderr call -----------------------------
-2026-07-13 17:04:39.211 python[8478:2493508] 2026-07-13 17:04:39.211126 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.279 python[8478:2493508] 2026-07-13 17:04:39.279629 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.314 python[8478:2493508] 2026-07-13 17:04:39.314635 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.349 python[8478:2493508] 2026-07-13 17:04:39.349826 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.384 python[8478:2493508] 2026-07-13 17:04:39.384318 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.419 python[8478:2493508] 2026-07-13 17:04:39.419905 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.453 python[8478:2493508] 2026-07-13 17:04:39.453214 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.486 python[8478:2493508] 2026-07-13 17:04:39.486618 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.519 python[8478:2493508] 2026-07-13 17:04:39.519779 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.554 python[8478:2493508] 2026-07-13 17:04:39.554560 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.587 python[8478:2493508] 2026-07-13 17:04:39.587929 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
-2026-07-13 17:04:39.626 python[8478:2493508] 2026-07-13 17:04:39.626348 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.317 python[20719:3138717] 2026-07-13 18:19:44.317963 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.388 python[20719:3138717] 2026-07-13 18:19:44.388046 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.423 python[20719:3138717] 2026-07-13 18:19:44.423473 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.458 python[20719:3138717] 2026-07-13 18:19:44.458184 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.493 python[20719:3138717] 2026-07-13 18:19:44.493868 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.529 python[20719:3138717] 2026-07-13 18:19:44.529254 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.564 python[20719:3138717] 2026-07-13 18:19:44.564641 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.598 python[20719:3138717] 2026-07-13 18:19:44.598784 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.636 python[20719:3138717] 2026-07-13 18:19:44.636025 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.669 python[20719:3138717] 2026-07-13 18:19:44.669354 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.703 python[20719:3138717] 2026-07-13 18:19:44.703289 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
+2026-07-13 18:19:44.743 python[20719:3138717] 2026-07-13 18:19:44.743739 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running MLXExecutionProvider_2617557896386378424_0 node. Name:'MLXExecutionProvider_MLXExecutionProvider_2617557896386378424_0_0' Status Message: MetalEP MLX subgraph failed: MLX: unsupported boundary output dtype for ReduceSum_0_reduced
 ________________________ test_ReduceSum_13[v17-float64] ________________________
 
 op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
@@ -271,4 +271,4 @@ onnx_tests/helpers.py:129: AssertionError
 =========================== short test summary info ============================
 FAILED tests/test_statistical.py::test_ReduceSum_13[v17-uint64] - onnxruntime...
 FAILED tests/test_statistical.py::test_ReduceSum_13[v17-float64] - AssertionE...
-2 failed, 5 passed, 1191 deselected in 7.08s
+2 failed, 5 passed, 1191 deselected in 7.17s

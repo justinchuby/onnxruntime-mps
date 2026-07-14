@@ -1,0 +1,746 @@
+FFFFFFFF.FFF.                                                            [100%]
+=================================== FAILURES ===================================
+___________________________ test_Split_18[v18-uint8] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('uint8')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x122dd9d60>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('uint8'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=uint8)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:03.162 python[21053:3169992] 2026-07-13 18:21:03.162024 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.214 python[21053:3169992] 2026-07-13 18:21:03.214959 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.268 python[21053:3169992] 2026-07-13 18:21:03.268278 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.348 python[21053:3169992] 2026-07-13 18:21:03.348274 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.370 python[21053:3169992] 2026-07-13 18:21:03.370302 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.408 python[21053:3169992] 2026-07-13 18:21:03.408228 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.441 python[21053:3169992] 2026-07-13 18:21:03.441216 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.501 python[21053:3169992] 2026-07-13 18:21:03.501909 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+__________________________ test_Split_18[v18-uint16] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('uint16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x123878320>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('uint16'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=uint16)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:03.556 python[21053:3169992] 2026-07-13 18:21:03.556454 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.577 python[21053:3169992] 2026-07-13 18:21:03.577558 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.628 python[21053:3169992] 2026-07-13 18:21:03.628053 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.709 python[21053:3169992] 2026-07-13 18:21:03.709441 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.732 python[21053:3169992] 2026-07-13 18:21:03.732782 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.771 python[21053:3169992] 2026-07-13 18:21:03.771588 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.808 python[21053:3169992] 2026-07-13 18:21:03.808796 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.868 python[21053:3169992] 2026-07-13 18:21:03.868359 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+__________________________ test_Split_18[v18-uint32] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('uint32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x122b82a80>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('uint32'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=uint32)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:03.952 python[21053:3169992] 2026-07-13 18:21:03.952363 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:03.972 python[21053:3169992] 2026-07-13 18:21:03.972170 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.021 python[21053:3169992] 2026-07-13 18:21:04.020966 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.096 python[21053:3169992] 2026-07-13 18:21:04.096071 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.117 python[21053:3169992] 2026-07-13 18:21:04.117488 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.154 python[21053:3169992] 2026-07-13 18:21:04.154926 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.186 python[21053:3169992] 2026-07-13 18:21:04.186045 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.245 python[21053:3169992] 2026-07-13 18:21:04.245374 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+__________________________ test_Split_18[v18-uint64] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('uint64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x12387ac60>
+output_names = ['res0'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('uint64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([], dtype=uint64)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 1},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:04.273 python[21053:3169992] 2026-07-13 18:21:04.273703 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:04.303 python[21053:3169992] 2026-07-13 18:21:04.303182 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.318 python[21053:3169992] 2026-07-13 18:21:04.318475 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.344 python[21053:3169992] 2026-07-13 18:21:04.344926 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:04.363 python[21053:3169992] 2026-07-13 18:21:04.363536 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:04.382 python[21053:3169992] 2026-07-13 18:21:04.382872 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+___________________________ test_Split_18[v18-int8] ____________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('int8')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x117ef1c70>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('int8'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=int8)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:04.433 python[21053:3169992] 2026-07-13 18:21:04.433926 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.453 python[21053:3169992] 2026-07-13 18:21:04.453257 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.532 python[21053:3169992] 2026-07-13 18:21:04.532123 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.608 python[21053:3169992] 2026-07-13 18:21:04.608334 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.629 python[21053:3169992] 2026-07-13 18:21:04.629453 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.666 python[21053:3169992] 2026-07-13 18:21:04.666654 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.697 python[21053:3169992] 2026-07-13 18:21:04.697263 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.763 python[21053:3169992] 2026-07-13 18:21:04.763126 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+___________________________ test_Split_18[v18-int16] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('int16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x123879b80>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('int16'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=int16)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:04.811 python[21053:3169992] 2026-07-13 18:21:04.811917 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.831 python[21053:3169992] 2026-07-13 18:21:04.831353 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.878 python[21053:3169992] 2026-07-13 18:21:04.878664 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.954 python[21053:3169992] 2026-07-13 18:21:04.954118 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:04.975 python[21053:3169992] 2026-07-13 18:21:04.975109 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.012 python[21053:3169992] 2026-07-13 18:21:05.012426 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.043 python[21053:3169992] 2026-07-13 18:21:05.043056 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.107 python[21053:3169992] 2026-07-13 18:21:05.107500 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+___________________________ test_Split_18[v18-int32] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('int32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1235fd8b0>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('int32'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0], dtype=int32)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:05.157 python[21053:3169992] 2026-07-13 18:21:05.157748 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.177 python[21053:3169992] 2026-07-13 18:21:05.177790 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.226 python[21053:3169992] 2026-07-13 18:21:05.226151 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.301 python[21053:3169992] 2026-07-13 18:21:05.301794 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.323 python[21053:3169992] 2026-07-13 18:21:05.323064 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.360 python[21053:3169992] 2026-07-13 18:21:05.360627 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.391 python[21053:3169992] 2026-07-13 18:21:05.391082 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.455 python[21053:3169992] 2026-07-13 18:21:05.455792 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+___________________________ test_Split_18[v18-int64] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('int64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1678fc140>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('int64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0, 0, 0, 0])},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:05.505 python[21053:3169992] 2026-07-13 18:21:05.505802 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.525 python[21053:3169992] 2026-07-13 18:21:05.525802 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.574 python[21053:3169992] 2026-07-13 18:21:05.574544 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.649 python[21053:3169992] 2026-07-13 18:21:05.649152 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.670 python[21053:3169992] 2026-07-13 18:21:05.670176 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.706 python[21053:3169992] 2026-07-13 18:21:05.706786 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.737 python[21053:3169992] 2026-07-13 18:21:05.737800 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:05.801 python[21053:3169992] 2026-07-13 18:21:05.801624 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+__________________________ test_Split_18[v18-float32] __________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('float32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x122b82b70>
+output_names = ['res0', 'res1', 'res2'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('float32'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([0., 0., 0., 0.], dtype=float32)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 3},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:05.932 python[21053:3169992] 2026-07-13 18:21:05.932059 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-2 Input shape={5,5,5,3} NumOutputs=4 Num entries in 'split' (must equal number of outputs) was 4 Sum of sizes in 'split' (must equal size of selected axis) was 7
+2026-07-13 18:21:05.992 python[21053:3169992] 2026-07-13 18:21:05.992632 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-2 Input shape={5,5,5,3} NumOutputs=4 Num entries in 'split' (must equal number of outputs) was 4 Sum of sizes in 'split' (must equal size of selected axis) was 7
+2026-07-13 18:21:06.145 python[21053:3169992] 2026-07-13 18:21:06.145374 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-2 Input shape={4,5,5,3} NumOutputs=4 Num entries in 'split' (must equal number of outputs) was 4 Sum of sizes in 'split' (must equal size of selected axis) was 7
+2026-07-13 18:21:06.172 python[21053:3169992] 2026-07-13 18:21:06.172510 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=-3 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.192 python[21053:3169992] 2026-07-13 18:21:06.192898 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.227 python[21053:3169992] 2026-07-13 18:21:06.226943 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,0} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.254 python[21053:3169992] 2026-07-13 18:21:06.254585 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.308 python[21053:3169992] 2026-07-13 18:21:06.308377 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+__________________________ test_Split_18[v18-float64] __________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('float64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1235ff020>
+output_names = ['res0'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('float64'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([], dtype=float64)},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 1},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:06.335 python[21053:3169992] 2026-07-13 18:21:06.335179 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.356 python[21053:3169992] 2026-07-13 18:21:06.356582 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.374 python[21053:3169992] 2026-07-13 18:21:06.374050 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.403 python[21053:3169992] 2026-07-13 18:21:06.403428 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.424 python[21053:3169992] 2026-07-13 18:21:06.424103 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+____________________________ test_Split_18[v18-<U0] ____________________________
+
+op = <module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>
+dtype = dtype('<U')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:79: in test_fun
+    candidate = run_candidate(model)
+                ^^^^^^^^^^^^^^^^^^^^
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:144: in run_mlx
+    result = {k: v for k, v in zip(output_names, sess.run(None, {}))}
+                                                 ^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1238799a0>
+output_names = ['res0'], input_feed = {}, run_options = None
+
+    def run(self, output_names, input_feed, run_options=None) -> Sequence[np.ndarray | SparseTensor | list | dict]:
+        """
+        Compute the predictions.
+    
+        :param output_names: name of the outputs
+        :param input_feed: dictionary ``{ input_name: input_value }``
+        :param run_options: See :class:`onnxruntime.RunOptions`.
+        :return: list of results, every result is either a numpy array,
+            a sparse tensor, a list or a dictionary.
+    
+        ::
+    
+            sess.run([output_name], {input_name: x})
+        """
+        self._validate_input(list(input_feed.keys()))
+        if not output_names:
+            output_names = [output.name for output in self._outputs_meta]
+        try:
+>           return self._sess.run(output_names, input_feed, run_options)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+E           Falsifying example: test_fun(
+E               op=<module 'spox.opset.ai.onnx.v18' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v18.py'>,
+E               dtype=dtype('<U'),
+E               data=data(...),
+E           )
+E           Draw 1: TestCaseDraw(inputs={'input': array([], dtype='<U1')},
+E            attribute_kwargs={'axis': 0, 'num_outputs': 1},
+E            spox_fun=split)
+E           Explanation:
+E               These lines were always and only run by failing examples:
+E                   /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:321
+
+.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:320: Fail
+----------------------------- Captured stderr call -----------------------------
+2026-07-13 18:21:06.452 python[21053:3169992] 2026-07-13 18:21:06.452512 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.469 python[21053:3169992] 2026-07-13 18:21:06.469796 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,3,1,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.488 python[21053:3169992] 2026-07-13 18:21:06.487985 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,3,1,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.514 python[21053:3169992] 2026-07-13 18:21:06.514496 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,3,1,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.532 python[21053:3169992] 2026-07-13 18:21:06.531953 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Cannot split using values in 'split' attribute. Axis=0 Input shape={4,3,1,5} NumOutputs=3 Num entries in 'split' (must equal number of outputs) was 3 Sum of sizes in 'split' (must equal size of selected axis) was 6
+2026-07-13 18:21:06.556 python[21053:3169992] 2026-07-13 18:21:06.556364 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+2026-07-13 18:21:06.577 python[21053:3169992] 2026-07-13 18:21:06.577794 [E:onnxruntime:, sequential_executor.cc:620 ExecuteKernel] Non-zero status code returned while running Split node. Name:'Split_0' Status Message: Invalid num_outputs value of 1. Size of dimension being split is 0
+=========================== short test summary info ============================
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-uint8] - onnxr...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-uint16] - onnx...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-uint32] - onnx...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-uint64] - onnx...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-int8] - onnxru...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-int16] - onnxr...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-int32] - onnxr...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-int64] - onnxr...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-float32] - onn...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-float64] - onn...
+FAILED tests/test_manipulation_functions.py::test_Split_18[v18-<U0] - onnxrun...
+11 failed, 2 passed, 1185 deselected in 4.17s

@@ -1,90 +1,66 @@
-........Fatal Python error: Segmentation fault
+..........F                                                              [100%]
+=================================== FAILURES ===================================
+__________________________ test_Clip_13[v17-float64] ___________________________
 
-Current thread 0x00000001ed809e80 (most recent call first):
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 634 in _create_inference_session
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 528 in __init__
-  File "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py", line 138 in run_mlx
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 79 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1004 in test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1107 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 824 in default_executor
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1150 in execute_once
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1212 in _execute_once_for_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 434 in __stoppable_test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 575 in test_function
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1325 in generate_new_examples
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 1567 in _run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/internal/conjecture/engine.py", line 994 in run
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 1415 in run_engine
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/hypothesis/core.py", line 2222 in wrapped_test
-  File "/Users/justinc/Documents/GitHub/onnx-tests/tests/utils.py", line 72 in test_fun
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 167 in pytest_pyfunc_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/python.py", line 1707 in runtest
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 184 in pytest_runtest_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 250 in <lambda>
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 361 in from_call
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 249 in call_and_report
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 139 in runtestprotocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 408 in pytest_runtestloop
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 384 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 330 in wrap_session
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/main.py", line 377 in pytest_cmdline_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_callers.py", line 121 in _multicall
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_manager.py", line 120 in _hookexec
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pluggy/_hooks.py", line 512 in __call__
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 229 in _main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253 in _console_main
-  File "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/pytest/__main__.py", line 9 in <module>
-  File "<frozen runpy>", line 88 in _run_code
-  File "<frozen runpy>", line 203 in _run_module_as_main
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float64')
 
-Current thread's C stack trace (most recent call first):
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _Py_DumpStack+0x48 [0x1030ffa54]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_dump_c_stack+0x58 [0x103114914]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at faulthandler_fatal_error+0x17c [0x103114854]
-  Binary file "/usr/lib/system/libsystem_platform.dylib", at _sigtramp+0x38 [0x181693744]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZNK3Ort6detail18ConstValueInfoImplINS0_7UnownedIK12OrtValueInfoEEE7GetNameEv+0x44 [0x12d542234]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZNK3Ort6detail18ConstValueInfoImplINS0_7UnownedIK12OrtValueInfoEEE7GetNameEv+0x44 [0x12d542234]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx12_GLOBAL__N_19ClipClaimEN3Ort6detail13ConstNodeImplINS2_7UnownedIK7OrtNodeEEEE+0x180 [0x12d554400]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN11ort_mps_mlx9ClaimableEN3Ort6detail13ConstNodeImplINS1_7UnownedIK7OrtNodeEEEE+0xa8 [0x12d54ae04]
-  Binary file "/Users/justinc/Documents/GitHub/onnxruntime-mlx-conf/build/libonnxruntime_mlx_ep.dylib", at _ZN7MetalEp17GetCapabilityImplEP5OrtEpPK8OrtGraphP21OrtEpGraphSupportInfo+0xa0 [0x12d53d6e4]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNK11onnxruntime23PluginExecutionProvider13GetCapabilityERKNS_11GraphViewerERKNS_18IExecutionProvider13IKernelLookupERKNS_22GraphOptimizerRegistryEPNS_19IResourceAccountantE+0x19c [0x14a51bd18]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNK11onnxruntime12_GLOBAL__N_13$_0clERKNS_18IExecutionProviderERKNS_11GraphViewerERKNS2_13IKernelLookupEPNS_19IResourceAccountantERKNS_22GraphOptimizerRegistryE+0x34 [0x14aebddd8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntimeL18GetCapabilityForEPERKNS_12_GLOBAL__N_124GetCapabilityForEPParamsERKNS_7logging6LoggerE+0x350 [0x14aec0994]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntimeL28PartitionOnnxFormatModelImplERNS_5GraphERNS_11FuncManagerERNS_21KernelRegistryManagerERNS_14KernelRegistryERNS_18IExecutionProviderENS_16GraphPartitioner4ModeERiRKNSt3__18functionIFNS_6common6StatusES1_RbS9_RKNSE_IFvRKS0_EEEEEESN_RKNSE_IFbvEEERKNSE_IFvSJ_RKNS_17ComputeCapabilityERKNSD_12basic_stringIcNSD_11char_traitsIcEENSD_9allocatorIcEEEEEEERKNS_7logging6LoggerEPNS_19IResourceAccountantERKNS_22GraphOptimizerRegistryEbPNS_13LayeringIndexE+0x264 [0x14aebe480]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNK11onnxruntime16GraphPartitioner9PartitionERNS_5GraphERNS_11FuncManagerERKNSt3__18functionIFNS_6common6StatusES2_RbRNS_18IExecutionProviderERKNS6_IFvRKS1_EEEEEERKNS_13ConfigOptionsERKNS_7logging6LoggerEPNS_13LayeringIndexENS0_4ModeERKNS_5epctx15ModelGenOptionsESH_+0x850 [0x14aebafac]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession14TransformGraphERNS_5GraphEb+0xa14 [0x14a488bcc]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime16InferenceSession10InitializeEv+0x175c [0x14a48cc30]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN11onnxruntime6python17InitializeSessionEPNS_16InferenceSessionENSt3__18functionIFvS2_RKNS3_6vectorINS3_12basic_stringIcNS3_11char_traitsIcEENS3_9allocatorIcEEEENS9_ISB_EEEERKNS3_13unordered_mapISB_NSG_ISB_SB_NS3_4hashISB_EENS3_8equal_toISB_EENS9_INS3_4pairIKSB_SB_EEEEEESI_SK_NS9_INSL_ISM_SP_EEEEEEEEESF_RKNS5_ISP_NS9_ISP_EEEERKNS3_13unordered_setISB_SI_SK_SC_EE+0xf0 [0x14a3ce698]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZNO8pybind116detail15argument_loaderIJPN11onnxruntime6python18PyInferenceSessionERKNSt3__16vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSB_ISD_EEEERKNS7_INS6_13unordered_mapISD_SD_NS6_4hashISD_EENS6_8equal_toISD_EENSB_INS6_4pairIKSD_SD_EEEEEENSB_ISR_EEEERKNS6_13unordered_setISD_SK_SM_SE_EEEE4callIvNS0_9void_typeERZNS3_16addObjectMethodsERNS_7module_ENS6_8functionIFvPNS2_16InferenceSessionESH_RKNSI_ISD_SR_SK_SM_NSB_INSN_ISO_SR_EEEEEEEEEE4$_93EENS6_9enable_ifIXsr3std7is_voidIT_EE5valueES12_E4typeEOT1_+0x1b8 [0x14a429ec8]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZZN8pybind1112cpp_function10initializeIZN11onnxruntime6python16addObjectMethodsERNS_7module_ENSt3__18functionIFvPNS2_16InferenceSessionERKNS6_6vectorINS6_12basic_stringIcNS6_11char_traitsIcEENS6_9allocatorIcEEEENSE_ISG_EEEERKNS6_13unordered_mapISG_NSL_ISG_SG_NS6_4hashISG_EENS6_8equal_toISG_EENSE_INS6_4pairIKSG_SG_EEEEEESN_SP_NSE_INSQ_ISR_SU_EEEEEEEEEE4$_93vJPNS3_18PyInferenceSessionESK_RKNSA_ISU_NSE_ISU_EEEERKNS6_13unordered_setISG_SN_SP_SH_EEEJNS_4nameENS_9is_methodENS_7siblingEA42_cEEEvOT_PFT0_DpT1_EDpRKT2_ENUlRNS_6detail13function_callEE_8__invokeES1U_+0x84 [0x14a429bcc]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so", at _ZN8pybind1112cpp_function10dispatcherEP7_objectPKS2_mS2_+0xd10 [0x14a335828]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL+0x13c [0x103042390]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x102ebc520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at slot_tp_init+0x218 [0x102f7b088]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at type_call+0x94 [0x102f6e2b0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at PyObject_Vectorcall+0x17c [0x102ebaf94]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL_KW_NON_PY+0xe8 [0x103054178]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x102ebc520]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyObject_Call_Prepend+0x128 [0x102ebd53c]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at slot_tp_call+0x178 [0x102f774d0]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at PyObject_Vectorcall+0x17c [0x102ebaf94]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _TAIL_CALL_CALL_KW_NON_PY+0xe8 [0x103054178]
-  Binary file "/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/bin/python3.14", at _PyFunction_Vectorcall+0x2f0 [0x102ebc520]
-  <truncated rest of calls>
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
 
-Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, google._upb._message, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand (total: 12)
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:94: in test_fun
+    h.assert_allclose(cand, exp, err_msg=err_msg)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = array(0.), desired = array(nan)
+err_msg = 'output `0` of `Clip` did not meet expectation\n  inputs: `[array(0.), None, array(nan)]`\n  attributes: `{}`'
+
+    def assert_allclose(
+        actual: np.ndarray, desired: np.ndarray, /, *, err_msg: str | None = None
+    ):
+        """Like `numpy.testing.assert_allclose` but takes dtype into account for relative
+        tolerance."""
+        if actual.dtype != desired.dtype:
+            raise TypeError(f"dtypes do not match `{actual.dtype}` != `{desired.dtype}`")
+        kwargs = {}
+        if actual.dtype == np.float16:
+            kwargs = {"rtol": 1e-3}
+        elif actual.dtype == np.float32:
+            kwargs = {"rtol": 1e-5}
+        elif actual.dtype == np.float64:
+            kwargs = {"rtol": 1e-7}
+    
+>       np.testing.assert_allclose(actual, desired, **kwargs, err_msg=err_msg)  # type: ignore
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: 
+E       Not equal to tolerance rtol=1e-07, atol=0
+E       output `0` of `Clip` did not meet expectation
+E         inputs: `[array(0.), None, array(nan)]`
+E         attributes: `{}`
+E       nan location mismatch:
+E        ACTUAL: array(0.)
+E        DESIRED: array(nan)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('float64'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs=[array(0.), None, array(nan)],
+E        attribute_kwargs={},
+E        spox_fun=clip)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:114
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/_core/arrayprint.py:640
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py:253
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/numpy/testing/_private/utils.py:789
+
+onnx_tests/helpers.py:129: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_elementwise.py::test_Clip_13[v17-float64] - AssertionError: 
+1 failed, 10 passed, 1187 deselected in 2.12s

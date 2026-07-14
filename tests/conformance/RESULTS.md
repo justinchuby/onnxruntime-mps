@@ -6,10 +6,23 @@ Property-based (Hypothesis) fuzz-conformance of the onnxruntime-mlx
 source-of-truth (each generated model is run on the MLX EP **and** on the ONNX
 reference evaluator; outputs are compared with the suite's own tolerances).
 
-> These are **fuzzing findings, not a green/red gate.** Failures/crashes below
-> are recorded for triage only — none are fixed here. Because Hypothesis samples
-> randomly, exact pass/fail counts vary run-to-run; the *classes* of failure are
-> stable. This run: `--hypothesis-seed=0`, `--hypothesis-max-examples=25`.
+> These are **fuzzing findings, not a green/red gate.** Because Hypothesis
+> samples randomly, exact pass/fail counts vary run-to-run; the *classes* of
+> failure are stable. This run: `--hypothesis-seed=0`,
+> `--hypothesis-max-examples=25`.
+>
+> **Update (claim-hardening pass, branch `fix/claim-hardening`).** The
+> CRASH/ABORT robustness classes below **have been fixed**, and — per the
+> corrected directive — **zero-size / empty tensors are now handled *on MLX*,
+> not rejected to CPU.** A claimed op never crashes; empty operands run on the
+> MLX path and produce the exact ONNX/numpy-reference output shape (and values,
+> where the reference defines them). **CRASH count: 16 → 0.** Only two forms are
+> still declined to CPU: **`float64`** (Apple GPUs have no fp64 — an unavoidable
+> Metal hardware limit) and absent-optional forms that are handled via defaults.
+> The residual FAILs are *not* memory-safety or zero-size issues: they are
+> numeric-tolerance gaps, NaN/overflow semantics, or `op`×`dtype` combinations
+> the ONNX **reference evaluator / ORT CPU itself** cannot run (see "Known
+> non-crash gaps"). See "Claim-hardening" for exactly what changed.
 
 ## Environment
 
@@ -48,11 +61,25 @@ is contained to that op and recorded as `CRASH(rc=…)`.
 
 ## Summary (71 claimed ops)
 
+Counts **after** the claim-hardening pass (before → after: CRASH 16 → **0**,
+PASS 28 → **37**, FAIL 27 → **34**). Zero-size inputs now execute **on MLX** for
+every supported dtype; the corrected pass moved **Expand** from FAIL → PASS and
+removed the last empty-output CopyOut/broadcast crashes.
+
 | Result | Count | Ops |
 |---|---|---|
-| ✅ PASS | 28 | Add, Sub, Mul, Div, Abs, Neg, Exp, Log, Sqrt, Reciprocal, Floor, Ceil, Round, Sum, Sigmoid, Tanh, LeakyRelu, Equal, Less, Greater, GreaterOrEqual, LessOrEqual, Not, And, Or, Xor, Cast, Identity |
-| ⚠️ FAIL | 27 | Pow, Erf, Sign, Min, Max, Mean, Relu, Gelu, Elu, Selu, Softplus, HardSigmoid, HardSwish, Mish, PRelu, Where, Conv, ReduceSum, ReduceMean, ReduceMax, ReduceMin, ReduceProd, ReduceL1, ReduceL2, ReduceSumSquare, ReduceLogSum, ReduceLogSumExp |
-| 💥 CRASH | 16 | Clip, Slice, Softmax, LogSoftmax, Concat, Reshape, Transpose, Split, Pad, Gather, Squeeze, Unsqueeze, Flatten, Expand, Tile, MatMul |
+| ✅ PASS | 37 | Add, Sub, Mul, Div, Abs, Neg, Exp, Log, Sqrt, Reciprocal, Floor, Ceil, Round, Sum, Sigmoid, Tanh, LeakyRelu, Equal, Less, Greater, GreaterOrEqual, LessOrEqual, Not, And, Or, Xor, **Softmax**, **Concat**, **Reshape**, **Transpose**, **Slice**, **Squeeze**, **Unsqueeze**, **Tile**, **Expand**, Cast, Identity |
+| ⚠️ FAIL | 34 | Pow, Erf, Sign, Min, Max, Mean, Clip, Relu, Gelu, Elu, Selu, Softplus, HardSigmoid, HardSwish, Mish, PRelu, Where, ReduceSum, ReduceMean, ReduceMax, ReduceMin, ReduceProd, ReduceL1, ReduceL2, ReduceSumSquare, ReduceLogSum, ReduceLogSumExp, LogSoftmax, Split, Pad, Gather, Flatten, MatMul, Conv |
+| 💥 CRASH | 0 | *(none — all 16 prior crashes resolved)* |
+
+**Bold** PASS ops were CRASH before hardening. **Expand** now PASSES with
+zero-size inputs handled on MLX (the empty broadcast is computed with numpy
+bidirectional-broadcast dim rules instead of a naive `max`, so `[3,0]`-style
+operands no longer abort `mlx_broadcast_to`). The other prior-CRASH ops
+(LogSoftmax, Split, Pad, MatMul, …) now **FAIL cleanly without crashing** — and
+their *empty* cases run correctly on MLX; the remaining failures are
+`op`×`dtype` coverage gaps or reference-side limitations, **not** EP faults or
+empties (see "Known non-crash gaps").
 
 Machine-readable per-op results: [`results.csv`](results.csv). Per-op pytest
 logs: [`logs/`](logs/). First-crashing-example captures:
@@ -63,7 +90,12 @@ logs: [`logs/`](logs/). First-crashing-example captures:
 > "Provider attribution" below) confirms the PASS ops **did execute on the MLX
 > provider** for their supported dtypes (fp16/fp32) — e.g. Add/Sub/Mul/Div and
 > the elementwise/reduce families fuse into `MLXExecutionProvider_<hash>` nodes.
-> They fall back to CPU only for `float64` and zero-size inputs.
+> **Zero-size inputs now also run on MLX** (verified with `PROFILE=1`
+> `ran_on_MLX=True`): e.g. `MatMul (2,0)@(0,4)→(2,4)` zeros, `Pad` empty→empty
+> and empty→padded, `Expand [1]→[0]`, empty `Softmax`/`LogSoftmax`/`Where`/
+> `ReduceMax`/`ReduceMin`/`ReduceSum` — each produces the ONNX-reference output
+> shape/values on the MLX path with **no** CPU fallback. Only `float64` still
+> falls back to CPU (Metal has no fp64).
 
 ## Provider attribution (which ops ran on MLX vs CPU)
 
@@ -71,7 +103,8 @@ From ORT profiling (`PROFILE=1`, small sample). MLX-claimed nodes are **fused**
 into an opaque `MLXExecutionProvider_<hash>` node, so attribution is derived from
 the model's real op types + whether any MLX node executed.
 
-- **Ran on MLX** (for supported dtypes; falls back to CPU for `float64`/empty):
+- **Ran on MLX** (for supported dtypes, **including zero-size / empty inputs**;
+  falls back to CPU only for `float64`):
   Add, Sub, Mul, Div, Abs, Neg, Exp, Log, Sqrt, Reciprocal, Floor, Round, Min,
   Max, Sign, Relu, Gelu, Elu, Selu, Softplus, HardSwish, Mish, PRelu, Sigmoid,
   Tanh, LeakyRelu, Erf, Not, Equal, Less, Greater, GreaterOrEqual, LessOrEqual,
@@ -90,26 +123,38 @@ Failures cluster into five reproducible root causes. Reproduce any single case
 with the suite's `reproduce_failure` hash printed in the per-op log, or re-run
 the op (see "Reproduce" below).
 
-### A. Zero-size / empty input tensors → ORT init failure *(systemic, highest priority)*
+### A. `op`×`dtype` coverage gaps ORT itself can't run → init/kernel failure
 
-The most common falsifying example for **almost every** elementwise / activation
-/ reduction / Conv / Where op is a **zero-size input**. The EP claims the node
-but the partition leaves it without a provider, so ORT aborts session init:
+> **Not a zero-size issue.** Zero-size / empty tensors are now **handled on
+> MLX** (see "what actually ran on MLX"). This class is a *dtype-coverage* gap:
+> the onnx-tests generator samples a `dtype` the op's ONNX schema nominally
+> allows but that **ORT has no kernel for on any provider** (e.g. `uint16` /
+> `int16` for Relu/Min/Max/Where/Pad, or integer `Mean`). It reproduces with a
+> **non-empty** input just as well as an empty one, so emptiness is incidental.
+
+When the MLX EP claims such a node, ORT's memcpy transformer aborts session
+init; when it declines, ORT CPU raises `NOT_IMPLEMENTED`. Either way the case
+cannot be computed by *any* backend — including the reference — so it is
+unfixable at the EP claim layer:
 
 ```
+# MLX-claimed:
 onnxruntime …: FAIL : Exception during initialization: transformer_memcpy.cc:254
   IsNodeCompatibleWithProvider … Provider type for Relu node 'Relu_0' is not set.
+# CPU-only (same op/dtype):
+onnxruntime …: NOT_IMPLEMENTED : Could not find an implementation for Relu(…)
 ```
 
-- Repro (Relu 13): `inputs=[array([], dtype=int16)]`
-- Repro (Where 16): `condition=array([False]), X/Y=array([], …)`
-- Repro (Conv): degenerate zero-sized spatial input
-- Same signature seen for: Pow, Erf, Min, Max, Mean, Gelu, Elu, Selu, Softplus,
-  HardSigmoid, HardSwish, Where, Conv, ReduceMean, …
+- Confirmed identical MLX-init-fail **and** CPU-`NOT_IMPLEMENTED` for:
+  `Relu int16` (both empty and 1-element), `Min/Max [(0,),(1,)] uint16`,
+  `Where (1,)/(2,)/() uint16`, `Pad(21) uint16/int16`, `Mean` integer.
+- Same signature seen for: Pow, Erf, Sign, Gelu, Elu, Selu, Softplus,
+  HardSigmoid, HardSwish, Conv, ReduceMean, … on their unsupported dtypes.
 
-**Root cause to triage:** the MLX EP should *decline* nodes whose inputs are
-zero-size (leave them to CPU) rather than claiming them; this is the same
-empty-tensor weakness that hard-crashes several other ops (§ CRASH below).
+**Root cause / triage:** a pure ORT dtype-coverage gap. Optionally the EP could
+tighten these claims to the dtypes ORT actually implements (turning the init
+abort into a cleaner CPU `NOT_IMPLEMENTED`), but this changes no pass/fail
+outcome and is orthogonal to the zero-size work.
 
 ### B. float16 precision beyond the suite's `rtol=1e-3`
 
@@ -152,59 +197,139 @@ float64 operands (`max rel diff ≈ 0.187`).
 
 ---
 
-## CRASHES — the process aborted (segfault / MLX fatal)
+## CRASHES — ✅ RESOLVED by the claim-hardening pass
 
-Two dominant crash classes, plus two claim-time segfaults. First-crashing
-examples captured in [`logs/culprit/`](logs/culprit/).
+> All 16 crashes below are **fixed** on `fix/claim-hardening` (re-run: CRASH = 0).
+> Crash class 1 (`float64`) is declined to CPU (a Metal hardware limit). Crash
+> class 2 (zero-size) is now **handled on the MLX path** — the op stays claimed
+> and produces the correct empty/degenerate output on MLX (no CPU fallback).
+> Crash class 3 (null-optional deref) is guarded. The three classes and fixes:
 
-### 1. `float64` claimed but unsupported on the MLX GPU → `abort`
+### 1. `float64` claimed but unsupported on the MLX GPU → `abort` — FIXED (Metal HW limit)
 
-The EP claims these ops for `float64`, but MLX cannot run doubles on the GPU and
-**aborts the process**: `MLX error: float64 is not supported on the GPU`.
+**Apple GPUs have no `float64`.** MLX aborts the moment a double array is
+materialised on the Metal stream — fp64 genuinely cannot run on our GPU, so
+this is an *unavoidable hardware limit*, not a policy choice. The data-movement
+gate `IsMovableType` (and the OneHot/Trilu value gate `IsBoundaryValueType`)
+previously admitted `float64`; **fix:** dropped `DOUBLE` from both gates so fp64
+forms fall back to ORT CPU. (A future option is routing fp64 to an MLX *CPU*
+device/stream instead of CPU-EP fallback, but that is out of scope here and not
+worth forcing.) Concat/Reshape/Transpose/Squeeze/Unsqueeze/Tile/Slice now
+**PASS**.
 
-| Op | Repro (first crash) |
-|---|---|
-| Concat | `float64` empty inputs |
-| Reshape | `data=array([1e-05], float64), shape=[-1]` |
-| Transpose | `data=array(0., float64)` |
-| Squeeze | `data=array(0., float64)` |
-| Unsqueeze | `data=array(0., float64), axes=[0]` |
-| Tile | `input=array([], float64)` |
-
-**Triage:** the EP must not claim `float64` tensors (leave to CPU fallback).
-
-### 2. Zero-size / degenerate shapes → MLX fatal or segfault
-
-| Op | rc | MLX/crash message | Repro |
-|---|---|---|---|
-| Softmax | 255 | `[max] Cannot max reduce zero size array` | `shape=(4,1,0), axis=-3` fp16 |
-| LogSoftmax | 255 | (same reduce-on-empty) | empty input |
-| Split | 255 | `split does not result in sub arrays with equal size` | `shape=(4,0,5), axis=-3, num_outputs=3` uint8 |
-| Expand | 255 | `Cannot broadcast array of shape (0) into shape (1)` | empty uint8, `shape=[]` |
-| Pad | 139 | segfault in compute | empty uint8 data, `mode=constant` |
-| MatMul | 139 | segfault in compute | `float16 (0,1,1,1,2) × (0,1,2,2,1)` |
-| Flatten | 255 | fatal on degenerate/float64 | scalar/float64 |
-| Gather | 255 | fatal on some draw | (see note) |
-
-> **Gather note:** under `-x` the suite hit an *unrelated* Hypothesis strategy
-> error (`Cannot have max_value=-1 < min_value=0`) for a certain index-bounds
-> draw — that is a **test-suite** issue, not the EP. In the full run a later
-> example still crashed the EP (rc=255), consistent with the empty/float64
-> classes above.
-
-### 3. Claim-time segfaults (during `GetCapability`)
-
-Crash is inside the EP's claim handler, before execution — stack:
-`MetalEp::GetCapabilityImpl → <Op>Claim → Ort::…ConstValueInfoImpl::GetName`.
-
-| Op | Repro (first crash) | Frame |
+| Op | Repro (was first crash) | Now |
 |---|---|---|
-| Clip | `inputs=[array(-0., f16), array(-1e-7, f16)]` (optional min/max absent) | `ClipClaim … GetName` |
-| Slice | `data=uint8 [[[52,52,52],[52,52,52]]]` (optional starts/ends/axes/steps) | `SliceClaim … GetName` |
+| Concat / Reshape / Transpose / Squeeze / Unsqueeze / Tile / Slice | `float64` data | PASS (fp64 → CPU, Metal has no fp64) |
 
-**Triage:** `ClipClaim` / `SliceClaim` call `GetName()` on **absent optional
-inputs** (Clip's min/max, Slice's starts/ends/axes/steps), dereferencing a null
-`OrtValueInfo` → segfault. Guard optional inputs before `GetName`.
+### 2. Zero-size / degenerate shapes → MLX fatal or segfault — FIXED (handled **on MLX**)
+
+Per the corrected directive, empties are **no longer rejected to CPU** — they
+run on MLX and match the ONNX/numpy reference output. Two distinct crash
+mechanisms were found and worked around **in the handlers** (`src/ep/ops/*.cc`),
+keeping the claim predicates permissive:
+
+1. **Construction-abort ops.** `mlx_max`/`mlx_min`/`mlx_logsumexp` call `abort()`
+   at op construction on a zero-size input. Handled in the handler: `ReduceMax`/
+   `ReduceMin` route empty inputs through `EmptyMinMaxReduce` (builds the
+   ONNX-reduced output shape filled with the reduction identity via `mlx_full`);
+   `LogSoftmax` emits `mlx_zeros_like` for an empty input. Softmax / Sum / Prod /
+   Mean and all elementwise ops compute empties natively.
+2. **Empty-output CopyOut crash.** `mlx_matmul` and `mlx_pad` return an *empty*
+   result with **no backing buffer**; the boundary `CopyOut`'s typed
+   `mlx_array_data_*` accessor segfaults on it (even though `count==0`). Handled
+   by re-materialising the empty result as a clean, correctly-shaped
+   `mlx_zeros` (0 elements ⇒ value-irrelevant, shape/dtype exact).
+3. **Expand broadcast.** The output dim is computed with numpy bidirectional
+   broadcast rules (a size-1 dim takes the other operand's size, incl. `0`)
+   instead of a naive `max`, so `[3,0]`↔`[3,1]` no longer asks
+   `mlx_broadcast_to` to expand a `0`-dim (which MLX rejects). **Expand PASSES.**
+
+Split additionally validates explicit `split` sizes and rejects rank-0 inputs.
+
+| Op | Was (crash) | Now |
+|---|---|---|
+| Softmax | `[max] Cannot max reduce zero size array` | **PASS** — empty on MLX |
+| Expand | empty-broadcast abort | **PASS** — empty on MLX (numpy broadcast dims) |
+| ReduceMax / ReduceMin | `abort()` at construction on empty | empty handled on MLX (identity fill); FAIL only on unsupported dtypes |
+| MatMul / Pad / LogSoftmax | empty-output CopyOut segfault / abort | empty handled on MLX (re-materialise / zeros_like); FAIL only reference/dtype-side |
+| Split | unequal-section abort | FAIL* (reference-side unequal-split error) |
+
+\* remaining FAILs are reference/CPU-side or dtype-coverage, not EP crashes and
+not empties — see "Known non-crash gaps".
+
+### 3. Claim-time segfaults (during `GetCapability`) — FIXED
+
+`ClipClaim`/`SliceClaim` (and `PadClaim`, `SplitClaim`, `ReductionClaim`,
+`TriluClaim`, `OptionalBiasIsValid`, `SkipLayerNormClaim`, `LayerNormClaim`)
+called `GetName()`/`TensorInfo()` on **absent optional inputs**, which ORT
+surfaces as a NULL `OrtValueInfo` → null deref. **Fix:** `TensorInfo` now returns
+`false` for a NULL value info, and a shared `SlotPresent(inputs, i)` /
+`ValueInfoPresent(v)` guard gates every optional-slot access. No claim predicate
+dereferences a null `OrtValueInfo`. Clip/Slice no longer crash (Slice PASSes).
+
+---
+
+## Claim-hardening — shared guards & handler-level empty handling
+
+Claim guards (`src/ep/op_claim.h`) — null-safety + the fp64 gate only:
+
+| Helper | Purpose |
+|---|---|
+| `ValueInfoPresent(v)` | true iff `v` wraps a live (non-NULL) `OrtValueInfo` |
+| `SlotPresent(vals, i)` | null-safe "optional input/output slot i is present & named" |
+| `TensorInfo(...)` | returns `false` for a NULL value info (was: unconditional deref) |
+| `IntsAttribute(node, name, out, present)` | shared INTS-attribute reader (Split `split`) |
+
+> The prior pass's zero-size *reject* helpers (`HasZeroSizedShape` /
+> `IsZeroSizedTensor` / `AnyInputZeroSized`) were **removed** — empties are now
+> handled on MLX in the handlers, not declined in the claim.
+
+- **fp64 excluded** (→ CPU; Metal has no fp64): `IsMovableType`,
+  `IsBoundaryValueType` (Concat, Reshape, Transpose, Squeeze, Unsqueeze, Tile,
+  Slice, Gather, Flatten, Expand, Pad, OneHot, Trilu).
+- **zero-size handled on MLX** (claim stays permissive; handler emits the correct
+  empty/degenerate output): Add/Mul/Sub/Sigmoid/Softmax (elementwise.cc);
+  Unary/Binary/MinMax/Where/Clip and `LogSoftmax` (math.cc); Reduce*, incl.
+  `ReduceMax`/`ReduceMin` via `EmptyMinMaxReduce` (reduction.cc);
+  `MatMul` empty-result re-materialisation (matmul.cc); `Expand` (numpy
+  broadcast dims), `Pad` empty-result re-materialisation, `Split` (shape.cc).
+- **null-optional guarded:** Clip, Trilu (math.cc); Slice, Split, Pad
+  (shape.cc); Reduce* (reduction.cc); Conv bias (conv.cc); LayerNorm,
+  SkipLayerNorm (norm_ext.cc).
+- **Split** validates explicit `split` sizes and rejects rank-0 inputs.
+
+## Known non-crash gaps (documented, not force-fit)
+
+None of these are crashes, memory-safety issues, or zero-size issues (empties
+run on MLX); they are pre-existing correctness/tolerance gaps or `op`×`dtype`
+combinations the reference/ORT-CPU also cannot compute.
+
+1. **fp16 precision > suite `rtol=1e-3`** (ran on MLX): Elu, Softplus, Mish,
+   HardSwish, HardSigmoid, ReduceLogSumExp — slightly different fp16 kernel
+   rounding (max abs Δ ≈ 1e-4…7e-4). See §B.
+2. **NaN propagation:** Sign(`nan`)→0 vs `nan`; PRelu(`x=0, slope=nan`); ReduceProd
+   with `nan`. MLX absorbs where ONNX propagates. See §C.
+3. **Integer reduction / overflow:** ReduceProd (saturates vs wraps), ReduceL2 /
+   ReduceMean (int overflow), ReduceSum (fp64 large-magnitude cancellation). §D.
+4. **Pow** large-magnitude / fp64 divergence. §E.
+5. **Reference/harness-side failures (not the EP; empties themselves run on MLX):**
+   - Gather — Hypothesis strategy raises `InvalidArgument`
+     (`max_value=-1 < min_value=0`) during example generation.
+   - Flatten / LogSoftmax — the ONNX **reference evaluator** raises `ValueError`
+     on an empty input (`op_flatten.py`, `op_log_softmax.py`), so there is no
+     expected value to compare — the MLX EP itself computes the empty output
+     fine (verified `ran_on_MLX=True`).
+   - Split — reference/ORT-CPU error `Invalid num_outputs value of 1. Size of
+     dimension being split is 0` and unequal explicit `split` sums.
+   - MatMul — reference/ORT-CPU error on non-broadcastable operand shapes the
+     fuzzer generated (`matmul_helper.h:144 … cannot broadcast`); the MLX EP
+     produces the correct empty output where the reference errors.
+   - Pad / Min / Max / Where / Relu / Mean and other `dtype`×opset combos (e.g.
+     `uint16`/`int16` Pad(21), integer `Mean`) — a pure **ORT dtype-coverage
+     gap**: **ORT CPU also lacks a kernel** (`Could not find an implementation
+     for …` / `transformer_memcpy … Provider type … is not set`). Reproduces
+     with non-empty inputs too, so it is unrelated to zero-size and unfixable at
+     the EP claim layer; neither backend can compute that `op`×`dtype`. See §A.
 
 ---
 

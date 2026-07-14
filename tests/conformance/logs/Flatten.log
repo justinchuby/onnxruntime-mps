@@ -1,1 +1,616 @@
-FFFFFFFFFF
+FFFFFFFFFFF.F                                                            [100%]
+=================================== FAILURES ===================================
+__________________________ test_Flatten_13[v17-uint8] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint8')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11efbf860>
+x = array([], dtype=uint8), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('uint8'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=uint8)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-uint16] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f4925d0>
+x = array([], dtype=uint16), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('uint16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=uint16)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-uint32] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f6559d0>
+x = array([], dtype=uint32), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('uint32'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=uint32)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-uint64] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('uint64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x12d9d5b50>
+x = array([], dtype=uint64), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('uint64'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=uint64)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+__________________________ test_Flatten_13[v17-int8] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int8')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x12dd8b0d0>
+x = array([], dtype=int8), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('int8'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=int8)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+__________________________ test_Flatten_13[v17-int16] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f414150>
+x = array([], dtype=int16), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('int16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=int16)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+__________________________ test_Flatten_13[v17-int32] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x12d8ee3d0>
+x = array([], dtype=int32), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('int32'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=int32)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+__________________________ test_Flatten_13[v17-int64] __________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('int64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f655950>
+x = array([], dtype=int64), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('int64'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=int64)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-float16] _________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float16')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x13c0e9ad0>
+x = array([], dtype=float16), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('float16'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=float16)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-float32] _________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float32')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f42f0d0>
+x = array([], dtype=float32), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('float32'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=float32)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+_________________________ test_Flatten_13[v17-float64] _________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('float64')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x12d9d4fd0>
+x = array([], dtype=float64), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('float64'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=float64)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+__________________________ test_Flatten_13[v17-bool] ___________________________
+
+op = <module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>
+dtype = dtype('bool')
+
+    @given(data=st.data())
+>   @pytest.mark.parametrize(
+               ^^^^^^^^^^^^
+        "op,dtype", dtype_params(op_name, version, type_var=type_var), ids=format
+    )
+
+tests/utils.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/utils.py:80: in test_fun
+    expected = run_reference(model)
+               ^^^^^^^^^^^^^^^^^^^^
+onnx_tests/runtime_wrappers.py:34: in run_reference
+    result_list = sess.run(None, {})
+                  ^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/reference_evaluator.py:603: in run
+    outputs = node.run(*inputs, **linked_attributes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:29: in run
+    res = self._run(x)
+          ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <onnx.reference.ops.op_flatten.Flatten object at 0x11f5ff150>
+x = array([], dtype=bool), axis = None
+
+    def _run(self, x, axis=None):
+        i = axis or self.axis
+        shape = x.shape
+        new_shape = (1, -1) if i == 0 else (np.prod(shape[:i]).astype(int), -1)
+>       return (x.reshape(new_shape),)
+                ^^^^^^^^^^^^^^^^^^^^
+E       ValueError: cannot reshape array of size 0 into shape (0,newaxis)
+E       Falsifying example: test_fun(
+E           op=<module 'spox.opset.ai.onnx.v17' from '/Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/spox/opset/ai/onnx/v17.py'>,
+E           dtype=dtype('bool'),
+E           data=data(...),
+E       )
+E       Draw 1: TestCaseDraw(inputs={'input': array([], dtype=bool)},
+E        attribute_kwargs={'axis': 1},
+E        spox_fun=flatten)
+E       Explanation:
+E           These lines were always and only run by failing examples:
+E               /Users/justinc/Documents/GitHub/onnx-tests/.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/_op.py:30
+
+.pixi/envs/default/lib/python3.14/site-packages/onnx/reference/ops/op_flatten.py:16: ValueError
+=========================== short test summary info ============================
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-uint8] - Val...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-uint16] - Va...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-uint32] - Va...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-uint64] - Va...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-int8] - Valu...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-int16] - Val...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-int32] - Val...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-int64] - Val...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-float16] - V...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-float32] - V...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-float64] - V...
+FAILED tests/test_manipulation_functions.py::test_Flatten_13[v17-bool] - Valu...
+12 failed, 1 passed, 1185 deselected in 2.85s

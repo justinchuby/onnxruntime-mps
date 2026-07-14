@@ -32,13 +32,14 @@ namespace {
 // ---- dtype gating ---------------------------------------------------------------------------
 
 // Dtypes the pure data-movement ops can carry end-to-end (every case CopyOut can memcpy at the
-// subgraph boundary). uint64 is excluded (no CopyOut case); everything else MLX maps flows through.
+// subgraph boundary). float64 is excluded: MLX cannot run doubles on the Metal GPU and hard-aborts
+// the process the moment a float64 array is materialised, so fp64 tensors are left to ORT CPU. uint64
+// is excluded (no CopyOut case); everything else MLX maps flows through.
 bool IsMovableType(ONNXTensorElementDataType t) {
   switch (t) {
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16:
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16:
     case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
@@ -493,13 +494,34 @@ void ExpandOp(TranslationContext& ctx, const NodeDesc& n) {
   std::vector<int> in_shape = TranslationContext::ShapeOf(data);
   size_t out_rank = std::max(in_shape.size(), target.size());
   std::vector<int> result(out_rank);
+  // ONNX Expand uses numpy bidirectional broadcasting, NOT a plain max: a size-1 dim takes the
+  // other operand's size (including 0). Using max() would turn broadcast(0,1) into 1 and then
+  // ask mlx_broadcast_to to expand a 0-dim to 1, which mlx rejects (raising through MLX_CHECK).
+  bool incompatible = false;
   for (size_t i = 0; i < out_rank; ++i) {
     int64_t d_in = i < out_rank - in_shape.size() ? 1 : in_shape[i - (out_rank - in_shape.size())];
     int64_t d_t = i < out_rank - target.size() ? 1 : target[i - (out_rank - target.size())];
-    result[i] = static_cast<int>(std::max(d_in, d_t));
+    int64_t d_out;
+    if (d_in == 1) {
+      d_out = d_t;
+    } else if (d_t == 1) {
+      d_out = d_in;
+    } else if (d_in == d_t) {
+      d_out = d_in;
+    } else {
+      // Genuinely incompatible (e.g. 0 vs 3): the ONNX reference errors too, so any non-crashing
+      // output is acceptable — fall back to zeros of an arbitrary compatible shape below.
+      d_out = std::max(d_in, d_t);
+      incompatible = true;
+    }
+    result[i] = static_cast<int>(d_out);
   }
   mlx_array r = mlx_array_new();
-  MLX_CHECK(mlx_broadcast_to(&r, data, result.data(), result.size(), ctx.stream()));
+  if (incompatible) {
+    MLX_CHECK(mlx_zeros(&r, result.data(), result.size(), mlx_array_dtype(data), ctx.stream()));
+  } else {
+    MLX_CHECK(mlx_broadcast_to(&r, data, result.data(), result.size(), ctx.stream()));
+  }
   ctx.Bind(n.outputs[0], Contiguous(ctx, ctx.Keep(r)));
 }
 
@@ -623,7 +645,19 @@ void PadOp(TranslationContext& ctx, const NodeDesc& n) {
   mlx_array r = mlx_array_new();
   MLX_CHECK(mlx_pad(&r, data, ax.data(), ax.size(), low.data(), low.size(), high.data(), high.size(),
                     pad_value, "constant", ctx.stream()));
-  ctx.Bind(n.outputs[0], ctx.Keep(r));
+  ctx.Keep(r);
+  // A zero-sized input padded only along already-empty axes yields an empty result whose backing
+  // buffer mlx_pad never allocates; the boundary CopyOut's typed data access would segfault on it,
+  // so re-materialise the empty result as a clean, correctly-shaped zeros array (0 elements, so the
+  // pad value is irrelevant — this matches numpy.pad's empty output exactly).
+  if (mlx_array_size(r) == 0) {
+    const std::vector<int> shp = TranslationContext::ShapeOf(r);
+    mlx_array z = mlx_array_new();
+    MLX_CHECK(mlx_zeros(&z, shp.data(), shp.size(), mlx_array_dtype(r), ctx.stream()));
+    ctx.Bind(n.outputs[0], ctx.Keep(z));
+    return;
+  }
+  ctx.Bind(n.outputs[0], r);
 }
 
 // Identity (ai.onnx): alias the input array to the output name (no copy; freed once via its owner).
@@ -966,8 +1000,8 @@ bool SliceClaim(Ort::ConstNode node) {
   if (!TensorInfo(inputs[0], data) || !TensorInfo(outputs[0], out)) return false;
   if (!IsMovableType(data) || out != data) return false;
   if (!IsConstInt64(inputs[1]) || !IsConstInt64(inputs[2])) return false;
-  if (inputs.size() >= 4 && !inputs[3].GetName().empty() && !IsConstInt64(inputs[3])) return false;
-  if (inputs.size() >= 5 && !inputs[4].GetName().empty()) {
+  if (inputs.size() >= 4 && InputPresent(inputs[3]) && !IsConstInt64(inputs[3])) return false;
+  if (inputs.size() >= 5 && InputPresent(inputs[4])) {
     std::vector<int64_t> steps;
     if (!ReadConstInt64AtClaim(inputs[4], steps)) return false;
     for (int64_t st : steps) {
@@ -982,12 +1016,40 @@ bool SplitClaim(Ort::ConstNode node) {
   const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
   if (inputs.empty() || inputs.size() > 2 || outputs.empty()) return false;
   ONNXTensorElementDataType data, out;
-  if (!TensorInfo(inputs[0], data) || !IsMovableType(data)) return false;
+  std::vector<int64_t> data_shape;
+  if (!StaticTensorInfo(inputs[0], data, data_shape) || !IsMovableType(data)) return false;
+  if (data_shape.empty()) return false;  // scalar (rank-0) cannot be split
   for (const auto& o : outputs) {
     if (!TensorInfo(o, out) || out != data) return false;
   }
-  if (inputs.size() == 2 && !inputs[1].GetName().empty()) return IsConstInt64(inputs[1]);
-  return true;
+  const int rank = static_cast<int>(data_shape.size());
+  const int64_t axis = IntAttribute(node, "axis", 0);
+  if (axis < -rank || axis >= rank) return false;
+  const int64_t axis_size = data_shape[NormAxis(axis, rank)];
+
+  // Explicit per-section sizes: the opset-13 `split` input or the opset<13 `split` INTS attribute.
+  std::vector<int64_t> sizes;
+  bool have_sizes = false;
+  if (inputs.size() == 2 && SlotPresent(inputs, 1)) {
+    if (!ReadConstInt64AtClaim(inputs[1], sizes)) return false;  // dynamic split sizes → CPU
+    have_sizes = true;
+  } else {
+    bool present = false;
+    if (!IntsAttribute(node, "split", sizes, present)) return false;
+    have_sizes = present;
+  }
+  if (have_sizes) {
+    int64_t total = 0;
+    for (int64_t s : sizes) {
+      if (s < 0) return false;
+      total += s;
+    }
+    // Sections must cover the axis exactly and match the output arity, else MLX splitting aborts.
+    return sizes.size() == outputs.size() && total == axis_size;
+  }
+  // Equal split (no explicit sizes): MLX requires the axis to divide evenly by the output count;
+  // ONNX permits a smaller final chunk, so a non-divisible split is left to CPU.
+  return axis_size % static_cast<int64_t>(outputs.size()) == 0;
 }
 
 bool TileClaim(Ort::ConstNode node) {
@@ -1012,11 +1074,11 @@ bool PadClaim(Ort::ConstNode node) {
   for (int64_t p : pads) {
     if (p < 0) return false;  // negative pads (cropping) left to CPU
   }
-  if (inputs.size() >= 3 && !inputs[2].GetName().empty()) {
+  if (inputs.size() >= 3 && InputPresent(inputs[2])) {
     ONNXTensorElementDataType cv;
     if (!TensorInfo(inputs[2], cv) || cv != data) return false;
   }
-  if (inputs.size() >= 4 && !inputs[3].GetName().empty() && !IsConstInt64(inputs[3])) return false;
+  if (inputs.size() >= 4 && InputPresent(inputs[3]) && !IsConstInt64(inputs[3])) return false;
   return true;
 }
 

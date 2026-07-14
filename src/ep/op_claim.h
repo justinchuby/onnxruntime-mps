@@ -19,9 +19,28 @@
 
 namespace ort_mps_mlx {
 
-// Element type (and, optionally, shape) of a value info. Returns false if the value is not a tensor.
+// True iff `value` wraps a live OrtValueInfo. ORT surfaces an OMITTED optional node input (e.g.
+// Clip's min/max, Slice's axes/steps, a Conv bias) as a NULL OrtValueInfo; any ValueInfo method
+// (GetName / TypeInfo / IsConstantInitializer) dereferences the handle and segfaults, so every claim
+// predicate MUST gate an optional slot through this before touching it.
+inline bool ValueInfoPresent(Ort::ConstValueInfo value) {
+  return static_cast<const OrtValueInfo*>(value) != nullptr;
+}
+
+// A node value slot (input or output) is "present" iff ORT handed back a non-null value info with a
+// non-empty name (an omitted interior optional slot is either absent from the vector or a NULL/
+// empty-named entry). The null-pointer check MUST precede GetName().
+inline bool SlotPresent(const std::vector<Ort::ConstValueInfo>& vals, size_t i) {
+  return i < vals.size() && ValueInfoPresent(vals[i]) && !vals[i].GetName().empty();
+}
+
+// Element type (and, optionally, shape) of a value info. Returns false if the value is a NULL/absent
+// optional slot or is not a tensor.
 inline bool TensorInfo(Ort::ConstValueInfo value, ONNXTensorElementDataType& type,
                        std::vector<int64_t>* shape = nullptr) {
+  if (!ValueInfoPresent(value)) {
+    return false;
+  }
   auto type_info = value.TypeInfo();
   if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
     return false;
@@ -33,6 +52,15 @@ inline bool TensorInfo(Ort::ConstValueInfo value, ONNXTensorElementDataType& typ
   }
   return true;
 }
+
+// NOTE (zero-size / empty tensors): claim predicates deliberately do NOT reject statically-empty
+// operands. Empty tensors are handled ON the MLX path in the op handlers themselves — the vast
+// majority of MLX kernels (elementwise / activation / softmax / matmul / pad / split / expand /
+// where and the sum/mean/prod reductions) compute empty inputs correctly, and the handful that
+// abort at construction on a zero-size array (mlx_max/mlx_min reductions and mlx_logsumexp, i.e.
+// ReduceMax / ReduceMin / LogSoftmax) short-circuit to a correctly-shaped result in their handler
+// instead of calling the aborting kernel. Keeping these nodes CLAIMED means empties run on MLX
+// (not ORT CPU). See src/ep/ops/reduction.cc and src/ep/ops/math.cc for the handler-side guards.
 
 // fp32/fp16 only (the historical "float" predicate used by MatMulNBits scales / GBQ scales).
 inline bool IsFloatType(ONNXTensorElementDataType type) {
@@ -64,6 +92,23 @@ inline int64_t IntAttribute(Ort::ConstNode node, const char* name, int64_t defau
   int64_t value = default_value;
   status = attr.GetValue(value);
   return status.IsOK() ? value : default_value;
+}
+
+// Read an INTS attribute. Sets `present` to whether the node carries the attribute at all; returns
+// false only on an actual read failure (present but not a readable INTS array). Absent → present=false
+// and returns true with `values` cleared.
+inline bool IntsAttribute(Ort::ConstNode node, const char* name, std::vector<int64_t>& values,
+                          bool& present) {
+  Ort::ConstOpAttr attr;
+  Ort::Status status = node.GetAttributeByName(name, attr);
+  if (!status.IsOK() || static_cast<const OrtOpAttr*>(attr) == nullptr ||
+      attr.GetType() == ORT_OP_ATTR_UNDEFINED) {
+    present = false;
+    values.clear();
+    return true;
+  }
+  present = true;
+  return attr.GetType() == ORT_OP_ATTR_INTS && attr.GetValueArray(values).IsOK();
 }
 
 // Read a scalar FLOAT attribute, falling back to `default_value` when absent or of another type.

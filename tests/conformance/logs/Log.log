@@ -9,4 +9,4 @@ tests/test_elementwise.py: 13 warnings
     return (np.log(x).astype(x.dtype),)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-3 passed, 1195 deselected, 38 warnings in 0.78s
+3 passed, 1195 deselected, 38 warnings in 0.80s

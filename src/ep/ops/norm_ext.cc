@@ -199,7 +199,7 @@ bool LayerNormClaim(Ort::ConstNode node) {
     return false;
   }
   if (!IsMlxFloatType(x) || scale != x || out != x) return false;
-  if (inputs.size() == 3 && !inputs[2].GetName().empty()) {
+  if (inputs.size() == 3 && SlotPresent(inputs, 2)) {
     ONNXTensorElementDataType bias;
     if (!TensorInfo(inputs[2], bias) || bias != x) return false;
   }
@@ -235,13 +235,13 @@ bool SkipLayerNormClaim(Ort::ConstNode node) {
   if (!TensorInfo(inputs[0], x) || !TensorInfo(outputs[0], out)) return false;
   if (!IsMlxFloatType(x) || out != x) return false;
   for (size_t i = 1; i < inputs.size(); ++i) {
-    if (inputs[i].GetName().empty()) continue;  // omitted optional
+    if (!SlotPresent(inputs, i)) continue;  // omitted optional
     ONNXTensorElementDataType t;
     if (!TensorInfo(inputs[i], t) || t != x) return false;
   }
   // Reject if mean (out[1]) or inv-std (out[2]) are requested — we do not compute them.
-  if (outputs.size() >= 2 && !outputs[1].GetName().empty()) return false;
-  if (outputs.size() >= 3 && !outputs[2].GetName().empty()) return false;
+  if (SlotPresent(outputs, 1)) return false;
+  if (SlotPresent(outputs, 2)) return false;
   return true;
 }
 

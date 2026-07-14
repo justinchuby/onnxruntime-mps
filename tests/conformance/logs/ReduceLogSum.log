@@ -16,13 +16,13 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 tests/utils.py:79: in test_fun
     candidate = run_candidate(model)
                 ^^^^^^^^^^^^^^^^^^^^
-../onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
     sess = ort.InferenceSession(
 .pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
     self._create_inference_session(providers, provider_options, disabled_optimizers)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x1344736b0>
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x142f236b0>
 providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
 provider_options = [{}, {}], disabled_optimizers = set()
 
@@ -144,13 +144,13 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 tests/utils.py:79: in test_fun
     candidate = run_candidate(model)
                 ^^^^^^^^^^^^^^^^^^^^
-../onnxruntime-mlx-conf/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
+../onnxruntime-mlx-harden/tests/conformance/mlx_runtime_wrapper.py:138: in run_mlx
     sess = ort.InferenceSession(
 .pixi/envs/default/lib/python3.14/site-packages/onnxruntime/capi/onnxruntime_inference_collection.py:528: in __init__
     self._create_inference_session(providers, provider_options, disabled_optimizers)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x13474f200>
+self = <onnxruntime.capi.onnxruntime_inference_collection.InferenceSession object at 0x144287200>
 providers = ['MLXExecutionProvider', 'CPUExecutionProvider']
 provider_options = [{}, {}], disabled_optimizers = set()
 
@@ -462,4 +462,4 @@ FAILED tests/test_statistical.py::test_ReduceLogSum_18[v18-uint64] - onnxrunt...
 FAILED tests/test_statistical.py::test_ReduceLogSum_18[v18-int32] - Exception...
 FAILED tests/test_statistical.py::test_ReduceLogSum_18[v18-int64] - Exception...
 FAILED tests/test_statistical.py::test_ReduceLogSum_18[v18-float64] - Asserti...
-5 failed, 2 passed, 1191 deselected, 426 warnings in 8.39s
+5 failed, 2 passed, 1191 deselected, 426 warnings in 8.12s

@@ -3,6 +3,7 @@
 // Reduction op handlers (ReduceSum/Max/Mean/Min/SumSquare, CumSum, TopK).
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -50,8 +51,55 @@ std::vector<int> NormalizeAxes(const std::vector<int64_t>& axes, int rank) {
   return normalized;
 }
 
+bool IsMlxFloatDtype(mlx_dtype dt) {
+  return dt == MLX_FLOAT32 || dt == MLX_FLOAT16 || dt == MLX_BFLOAT16;
+}
+
+// ReduceMax / ReduceMin over an empty (zero-size) input. mlx_max/mlx_min abort at construction on a
+// zero-size array ("Cannot max/min reduce zero size array"), so instead of calling the kernel we
+// synthesise the correctly-shaped result directly on MLX. The output shape is the ONNX-reduced shape
+// (reduced axes dropped, or kept as 1 when keepdims); it is filled with the ONNX reduction identity
+// (-inf for Max, +inf for Min on floats; 0 for integers). When the reduced result is itself empty
+// (a non-reduced axis is zero-sized) the fill produces an empty array of the right shape — no values.
+mlx_array EmptyMinMaxReduce(TranslationContext& ctx, mlx_array x, const std::vector<int>& axes,
+                            bool reduce_all, bool keepdims, ReductionKind kind) {
+  const std::vector<int> in = TranslationContext::ShapeOf(x);
+  const int rank = static_cast<int>(in.size());
+  std::vector<bool> reduced(rank, false);
+  if (reduce_all) {
+    std::fill(reduced.begin(), reduced.end(), true);
+  } else {
+    for (int a : axes) {
+      if (a >= 0 && a < rank) reduced[a] = true;
+    }
+  }
+  std::vector<int> out_shape;
+  for (int i = 0; i < rank; ++i) {
+    if (reduced[i]) {
+      if (keepdims) out_shape.push_back(1);
+    } else {
+      out_shape.push_back(in[i]);
+    }
+  }
+  const mlx_dtype dt = mlx_array_dtype(x);
+  float identity = 0.0f;
+  if (IsMlxFloatDtype(dt)) {
+    identity = (kind == ReductionKind::Max) ? -INFINITY : INFINITY;
+  }
+  mlx_array scalar = ctx.Keep(mlx_array_new_float32(identity));
+  if (dt != MLX_FLOAT32) scalar = ctx.Astype(scalar, dt);
+  mlx_array out = NewResult(ctx);
+  MLX_CHECK(mlx_full(&out, out_shape.data(), out_shape.size(), scalar, dt, ctx.stream()));
+  return out;
+}
+
 mlx_array ApplyReduction(TranslationContext& ctx, mlx_array x, const std::vector<int>& axes,
                          bool reduce_all, bool keepdims, ReductionKind kind) {
+  // mlx_max/mlx_min hard-abort on a zero-size array; handle empty Max/Min on MLX directly. Sum/Mean
+  // (and thus SumSquare/L2) handle empty inputs natively, so only Max/Min need the short-circuit.
+  if ((kind == ReductionKind::Max || kind == ReductionKind::Min) && mlx_array_size(x) == 0) {
+    return EmptyMinMaxReduce(ctx, x, axes, reduce_all, keepdims, kind);
+  }
   mlx_array out = NewResult(ctx);
   int status = 0;
   if (reduce_all) {
@@ -259,7 +307,7 @@ bool ReductionClaim(Ort::ConstNode node, bool float_only) {
       x != out || (float_only ? !IsMlxFloatType(x) : !IsMlxNumericType(x))) {
     return false;
   }
-  if (inputs.size() == 2 && !inputs[1].GetName().empty()) {
+  if (inputs.size() == 2 && SlotPresent(inputs, 1)) {
     ONNXTensorElementDataType axes_type;
     std::vector<int64_t> axes_shape;
     if (!TensorInfo(inputs[1], axes_type, &axes_shape) ||

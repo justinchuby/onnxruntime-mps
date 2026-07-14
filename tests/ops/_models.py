@@ -120,6 +120,11 @@ def run_mlx(model: bytes, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
     return _session(model, EP_PROVIDERS).run(None, feeds)
 
 
+def run_cpu(model: bytes, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+    """Run a model through ORT's CPU EP."""
+    return _session(model, ["CPUExecutionProvider"]).run(None, feeds)
+
+
 def assert_matches_cpu(
     model: bytes,
     feeds: dict[str, np.ndarray],
@@ -235,6 +240,108 @@ def gqa_model(
         "sin_cache": sin,
     }
     return model, feeds
+
+
+def bf16_gqa_model(
+    name: str,
+    **geometry: int,
+) -> tuple[bytes, bytes, dict[str, np.ndarray]]:
+    """Build equivalent bf16-interior and fp32-reference GQA models."""
+    reference, feeds = gqa_model(name, **geometry)
+    batch = geometry["batch"]
+    seq = geometry["seq"]
+    past = geometry["past"]
+    num_heads = geometry["num_heads"]
+    kv_heads = geometry["kv_heads"]
+    head = geometry["head"]
+    present = past + seq
+    max_seq = present + 4
+
+    float_specs = [
+        ("query", [batch, seq, num_heads * head]),
+        ("key", [batch, seq, kv_heads * head]),
+        ("value", [batch, seq, kv_heads * head]),
+        ("past_key", [batch, kv_heads, past, head]),
+        ("past_value", [batch, kv_heads, past, head]),
+        ("cos_cache", [max_seq, head // 2]),
+        ("sin_cache", [max_seq, head // 2]),
+    ]
+    fp_inputs = {
+        input_name: tensor(input_name, DataType.FLOAT, shape)
+        for input_name, shape in float_specs
+    }
+    bf_inputs = {
+        input_name: tensor(f"{input_name}_bf", DataType.BFLOAT16, shape)
+        for input_name, shape in float_specs
+    }
+    nodes = [
+        ir.Node(
+            "",
+            "Cast",
+            [fp_inputs[input_name]],
+            attributes=[ir.AttrInt64("to", int(DataType.BFLOAT16))],
+            outputs=[bf_inputs[input_name]],
+        )
+        for input_name, _ in float_specs
+    ]
+    seqlens = tensor("seqlens_k", DataType.INT32, [batch])
+    total = tensor("total_sequence_length", DataType.INT32, [1])
+    bf_outputs = [
+        tensor("attn_output_bf", DataType.BFLOAT16, [batch, seq, num_heads * head]),
+        tensor("present_key_bf", DataType.BFLOAT16, [batch, kv_heads, present, head]),
+        tensor("present_value_bf", DataType.BFLOAT16, [batch, kv_heads, present, head]),
+    ]
+    nodes.append(
+        ir.Node(
+            "com.microsoft",
+            "GroupQueryAttention",
+            [
+                bf_inputs["query"],
+                bf_inputs["key"],
+                bf_inputs["value"],
+                bf_inputs["past_key"],
+                bf_inputs["past_value"],
+                seqlens,
+                total,
+                bf_inputs["cos_cache"],
+                bf_inputs["sin_cache"],
+            ],
+            attributes=[
+                ir.AttrInt64("num_heads", num_heads),
+                ir.AttrInt64("kv_num_heads", kv_heads),
+                ir.AttrFloat32("scale", float(1.0 / np.sqrt(head))),
+                ir.AttrInt64("do_rotary", geometry["do_rotary"]),
+                ir.AttrInt64("rotary_interleaved", geometry.get("interleaved", 0)),
+            ],
+            outputs=bf_outputs,
+        )
+    )
+    fp_outputs = [
+        tensor("attn_output", DataType.FLOAT, [batch, seq, num_heads * head]),
+        tensor("present_key", DataType.FLOAT, [batch, kv_heads, present, head]),
+        tensor("present_value", DataType.FLOAT, [batch, kv_heads, present, head]),
+    ]
+    nodes.extend(
+        ir.Node(
+            "",
+            "Cast",
+            [bf],
+            attributes=[ir.AttrInt64("to", int(DataType.FLOAT))],
+            outputs=[fp],
+        )
+        for bf, fp in zip(bf_outputs, fp_outputs, strict=True)
+    )
+    inputs = [fp_inputs[input_name] for input_name, _ in float_specs[:5]]
+    inputs.extend([seqlens, total, fp_inputs["cos_cache"], fp_inputs["sin_cache"]])
+    graph = ir.Graph(
+        inputs,
+        fp_outputs,
+        nodes=nodes,
+        name="mlx_bf16_GroupQueryAttention",
+        opset_imports={"": 24, "com.microsoft": 1},
+    )
+    model = ir.to_proto(ir.Model(graph, ir_version=11)).SerializeToString()
+    return model, reference, feeds
 
 
 def matmulnbits_model(

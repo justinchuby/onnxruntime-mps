@@ -1,8 +1,8 @@
 // Copyright (c) 2026. Licensed under the MIT License.
 //
 // Attention op handlers (GroupQueryAttention with in-op RoPE + KV-cache append). Layout matches
-// com.microsoft.GroupQueryAttention (fp32, batch-first). The MLX path applies RoPE with the provided
-// cos/sin cache, appends new K/V to the cache, and runs GQA causal SDPA.
+// com.microsoft.GroupQueryAttention (f32/f16/bf16, batch-first). The MLX path applies RoPE with the
+// provided cos/sin cache, appends new K/V to the cache, and runs GQA causal SDPA.
 
 #include <cmath>
 
@@ -114,22 +114,26 @@ void GroupQueryAttentionOp(TranslationContext& ctx, const NodeDesc& n) {
 
 // ---- claim predicate (dtype/shape/attr checks; registry already matched domain/op/opset) --------
 
-// GroupQueryAttention (com.microsoft): fp32 Q/K/V + past/present K/V share-buffer, rotary caches.
+// GroupQueryAttention (com.microsoft): MLX float Q/K/V + past/present K/V share-buffer and rotary
+// caches. All floating-point inputs and outputs must use one dtype.
 // We claim the standard separate-QKV, 9-input decode/prefill layout used by our Qwen graph.
 bool GroupQueryAttentionClaim(Ort::ConstNode node) {
   const std::vector<Ort::ConstValueInfo> inputs = node.GetInputs();
   const std::vector<Ort::ConstValueInfo> outputs = node.GetOutputs();
   if (outputs.empty()) return false;
   ONNXTensorElementDataType out_type;
-  if (!TensorInfo(outputs[0], out_type) || out_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+  if (!TensorInfo(outputs[0], out_type) || !IsMlxFloatType(out_type)) {
     return false;
   }
   if (inputs.size() != 9) return false;  // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
-  // q/k/v/past_k/past_v/cos/sin are fp32; seqlens_k/total_seq are int32.
-  const int fp32_inputs[] = {0, 1, 2, 3, 4, 7, 8};
-  for (int idx : fp32_inputs) {
+  const int float_inputs[] = {0, 1, 2, 3, 4, 7, 8};
+  for (int idx : float_inputs) {
     ONNXTensorElementDataType t;
-    if (!TensorInfo(inputs[idx], t) || t != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) return false;
+    if (!TensorInfo(inputs[idx], t) || t != out_type) return false;
+  }
+  for (size_t idx = 1; idx < outputs.size() && idx < 3; ++idx) {
+    ONNXTensorElementDataType t;
+    if (!TensorInfo(outputs[idx], t) || t != out_type) return false;
   }
   ONNXTensorElementDataType st, tt;
   if (!TensorInfo(inputs[5], st) || st != ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) return false;

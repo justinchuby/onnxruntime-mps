@@ -141,7 +141,7 @@ The EP claims only the following ONNX op forms. All other ops remain on CPU.
 | ONNX op | Domain | Claimed form | MLX target(s) | Notes |
 |---|---|---|---|---|
 | **MatMulNBits** | `com.microsoft` | int4 block quantized weights, `bits=4`, `block_size=32` | `mlx_quantized_matmul` | Packed uint8 int4 weights are repacked once to MLX affine-quant format and cached persistently on the plan. |
-| **GroupQueryAttention** | `com.microsoft` | 9-input separate-QKV form; `fp32` Q/K/V/past_k/past_v/cos/sin; `int32` `seqlens_k`/`total_seq`; RoPE applied in-op | `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope` | Writes present K/V to the same ORT ctx outputs in `[B, kv_heads, total_seq, head]` `fp32` layout. |
+| **GroupQueryAttention** | `com.microsoft` | 9-input separate-QKV form; matching `fp32`/`fp16`/`bf16` Q/K/V/past_k/past_v/cos/sin; `int32` `seqlens_k`/`total_seq`; RoPE applied in-op | `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope` | Writes present K/V to the same ORT ctx outputs in `[B, kv_heads, total_seq, head]` native-float layout. |
 | **RMSNormalization** | `ai.onnx` | `axis=-1`, `fp32` | `mlx_fast_rms_norm` | Gamma is cached from live context data on first run. |
 | **SkipSimplifiedLayerNormalization** | `com.microsoft` | `fp32` input/skip/gamma | skip-add + `mlx_fast_rms_norm` | Preserves the residual+RMS behavior expected by the decoder graph. |
 | **GatherBlockQuantized** | `com.microsoft` | SYMMETRIC int4 embedding only, 3-input form, `zp=8` | gather + int4 dequant | The asymmetric 4-input `zero_points` form is intentionally not claimed and falls back to CPU. MLX `zero_points` support is a follow-up. |

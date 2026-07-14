@@ -143,6 +143,21 @@ def test_gqa(name: str, geom: dict[str, int]) -> None:
     m.assert_matches_cpu(model, feeds, rtol=2e-3, atol=2e-3)
 
 
+def test_gqa_bf16() -> None:
+    model, reference, feeds = m.bf16_gqa_model(
+        "bf16-decode-h64",
+        batch=1,
+        num_heads=14,
+        kv_heads=2,
+        head=64,
+        seq=1,
+        past=8,
+        do_rotary=1,
+    )
+    expected = m.run_cpu(reference, feeds)
+    m.assert_matches_ref(model, feeds, expected, rtol=2e-2, atol=2e-2)
+
+
 # --- dtype-generic fp16 (vs ORT CPU) ------------------------------------------------------------
 def _fp16_mul() -> tuple[bytes, dict[str, np.ndarray]]:
     return (

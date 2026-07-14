@@ -61,7 +61,7 @@ The following table is the current support contract. Do not broaden claims witho
 | ONNX op | Domain | Claimed ONNX form | MLX op(s) | Notes |
 |---|---|---|---|---|
 | **MatMulNBits** | `com.microsoft` | int4 block quantized weights, `bits=4`, `block_size=32` | `mlx_quantized_matmul` | Packed uint8 int4 weights are repacked once to MLX affine-quant format and cached persistently on the compiled plan. |
-| **GroupQueryAttention** | `com.microsoft` | 9-input separate-QKV form; `fp32` Q/K/V/past_k/past_v/cos/sin; `int32` `seqlens_k` and `total_seq`; RoPE applied in-op | `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope` | Writes present K/V back to the same ORT ctx outputs in `[B, kv_heads, total_seq, head]` `fp32` layout. This keeps prefill→decode KV handoff layout- and position-continuous. |
+| **GroupQueryAttention** | `com.microsoft` | 9-input separate-QKV form; matching `fp32`/`fp16`/`bf16` Q/K/V/past_k/past_v/cos/sin; `int32` `seqlens_k` and `total_seq`; RoPE applied in-op | `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope` | Writes present K/V back to the same ORT ctx outputs in `[B, kv_heads, total_seq, head]` native-float layout. This keeps prefill→decode KV handoff layout- and position-continuous. |
 | **RMSNormalization** | `ai.onnx` | `axis=-1`; `fp32`/`fp16`/`bf16` | `mlx_fast_rms_norm` | Gamma is cached from live context data on first run. Dtype-generic. |
 | **SkipSimplifiedLayerNormalization** | `com.microsoft` | `fp32`/`fp16`/`bf16` input/skip/gamma | skip-add + `mlx_fast_rms_norm` | Implements residual add followed by RMS normalization. Dtype-generic. |
 | **GatherBlockQuantized** | `com.microsoft` | int4 embedding, symmetric (3-input, `zp=8`) **and** asymmetric (4-input `zero_points`) | gather + int4 dequant | Symmetric: `w=(q-8)·scale`. Asymmetric: `w=(q-zp)·scale`. |
@@ -196,7 +196,7 @@ Absent attributes are simply not present in the map, so a handler reads an optio
 
 `MlxDtypeFromOnnx()` maps every ONNX tensor element type mlx-c can carry to its `mlx_dtype`: `fp32`, `fp16`, **`bf16`**, `fp64`, the signed/unsigned integer widths (`int8/16/32/64`, `uint8/16/32/64`), and `bool`. It is used in `Resolve`/`Bind`, constant materialization, the pre-eval boundary cast, and `CopyOut`, so **every tensor honors its actual dtype** rather than a hard-coded fp32.
 
-Because MLX carries the resolved dtype through its ops with no per-dtype code, the dtype-generic handlers (elementwise, activation, softmax, normalization, cast) work in fp32, fp16 **and** bf16 with a single implementation. `MatMulNBits`, `GroupQueryAttention`, and `GatherBlockQuantized` remain fp32-only (the quant repack / SDPA paths match the cpu-recipe graph); widening them is follow-up work.
+Because MLX carries the resolved dtype through its ops with no per-dtype code, the dtype-generic handlers (elementwise, activation, softmax, normalization, cast) work in fp32, fp16 **and** bf16 with a single implementation. `GroupQueryAttention` also accepts matching fp32/fp16/bf16 tensors end to end. `MatMulNBits` and `GatherBlockQuantized` remain fp32-only because their quantized representations match the cpu-recipe graph.
 
 ---
 
@@ -210,14 +210,14 @@ Runtime target: `mlx_quantized_matmul`.
 
 ### 3.2 Attention and KV cache
 
-`GroupQueryAttention` is the fused attention op used by the target decoder graphs. The claimed form is the 9-input separate-QKV `com.microsoft` op with `fp32` Q/K/V, past K/V, cos/sin, and `int32` sequence-length inputs.
+`GroupQueryAttention` is the fused attention op used by the target decoder graphs. The claimed form is the 9-input separate-QKV `com.microsoft` op with matching `fp32`/`fp16`/`bf16` Q/K/V, past K/V, cos/sin, and `int32` sequence-length inputs.
 
 The translator maps it to:
 
 - `mlx_fast_rope` for the in-op RoPE transform.
 - `mlx_fast_scaled_dot_product_attention` for attention.
 
-The backend writes present K/V to the same ORT context outputs in `[B, kv_heads, total_seq, head]` `fp32` layout. This preserves the runtime-owned KV-cache handoff across the prefill→decode boundary.
+The backend writes present K/V to the same ORT context outputs in `[B, kv_heads, total_seq, head]` native-float layout. This preserves the runtime-owned KV-cache handoff across the prefill→decode boundary.
 
 ### 3.3 Normalization
 

@@ -20,6 +20,14 @@ mlx_array Rope(TranslationContext& ctx, mlx_array x, mlx_array cos, mlx_array si
   std::vector<int> xs = TranslationContext::ShapeOf(x);  // [B,H,S,hd]
   const int hd = xs[3];
   const int rot = 2 * half;
+  if (ctx.RopeDynamic()) {
+    // Compiled decode path: rotate-half via a constant [hd,hd] matmul (Slice has no shapeless
+    // shape-inference). cos/sin here are the FULL-width [1,1,S,rot] rows. Requires rotary_dim==head_dim
+    // (rot==hd); BuildCompiledClosure only compiles when that holds.
+    mlx_array R = ctx.RotateHalfMatrix(hd, half);
+    mlx_array xr = ctx.MatMul(x, R);  // == rotate_half(x): [-x2, x1]
+    return ctx.AddA(ctx.Mul(x, cos), ctx.Mul(xr, sin));
+  }
   mlx_array rotated;
   if (!interleaved) {
     mlx_array x1 = ctx.Slice(x, {0, 0, 0, 0}, {xs[0], xs[1], xs[2], half});
@@ -79,9 +87,10 @@ void GroupQueryAttentionOp(TranslationContext& ctx, const NodeDesc& n) {
     mlx_array cos = ctx.Resolve(n.inputs[7]);  // [max_seq, rot/2]
     mlx_array sin = ctx.Resolve(n.inputs[8]);
     const int half = TranslationContext::ShapeOf(cos)[1];  // rot/2
-    // cos/sin rows for positions [past, past+S).
-    mlx_array cr = ctx.Reshape(ctx.Slice(cos, {past, 0}, {past + S, half}), {1, 1, S, half});
-    mlx_array sr = ctx.Reshape(ctx.Slice(sin, {past, 0}, {past + S, half}), {1, 1, S, half});
+    // cos/sin rows for positions [past, past+S). Static slice on the eager path; runtime dynamic
+    // slice on the compiled decode path (so the position offset is not baked into the compiled graph).
+    mlx_array cr = ctx.CosSinRow(n.inputs[7].name, cos, past, S, half);
+    mlx_array sr = ctx.CosSinRow(n.inputs[8].name, sin, past, S, half);
     qh = Rope(ctx, qh, cr, sr, half, interleaved);
     kh = Rope(ctx, kh, cr, sr, half, interleaved);
   }

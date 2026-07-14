@@ -36,6 +36,241 @@ std::string InputName(const Ort::ConstValueInfo& vi) {
   return static_cast<const OrtValueInfo*>(vi) == nullptr ? std::string() : vi.GetName();
 }
 
+// Constant tensor payload for a control-flow body initializer. Unlike fused-graph initializers
+// (session-owned), a body initializer is reached through a subgraph handle ORT releases once the
+// body is walked, so the bytes are COPIED into `owned` and referenced by `data`. Fused-graph
+// initializers threaded in as `enclosing_inits` leave `owned` null and borrow session memory.
+struct BodyInit {
+  const void* data = nullptr;
+  std::shared_ptr<std::vector<uint8_t>> owned;
+  std::vector<int64_t> shape;
+  ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+  size_t count = 0;
+};
+
+// Byte width of an ONNX tensor element type (0 for types we do not carry as raw initializer bytes).
+size_t ElementByteSize(ONNXTensorElementDataType t) {
+  switch (t) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64:
+      return 8;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32:
+      return 4;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16:
+      return 2;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+// Copy a node's scalar/array attributes into a NodeDesc (same policy as CompileImpl's flat loop:
+// INT/FLOAT/INTS/FLOATS/STRING carried; GRAPH/TENSOR/STRINGS skipped — GRAPH is handled separately
+// via Node_GetSubgraphs).
+void CopyScalarAttrs(Ort::ConstNode node, ort_mlx::NodeDesc& mnd) {
+  for (const Ort::ConstOpAttr& attr : node.GetAttributes()) {
+    std::string name = attr.GetName();
+    switch (attr.GetType()) {
+      case ORT_OP_ATTR_INT: {
+        int64_t v = 0;
+        if (attr.GetValue(v).IsOK()) mnd.ints[name] = v;
+        break;
+      }
+      case ORT_OP_ATTR_FLOAT: {
+        float v = 0.0f;
+        if (attr.GetValue(v).IsOK()) mnd.floats[name] = v;
+        break;
+      }
+      case ORT_OP_ATTR_INTS: {
+        std::vector<int64_t> v;
+        if (attr.GetValueArray(v).IsOK()) mnd.int_arrays[name] = std::move(v);
+        break;
+      }
+      case ORT_OP_ATTR_FLOATS: {
+        std::vector<float> v;
+        if (attr.GetValueArray(v).IsOK()) mnd.float_arrays[name] = std::move(v);
+        break;
+      }
+      case ORT_OP_ATTR_STRING: {
+        std::string v;
+        if (attr.GetValue(v).IsOK()) mnd.strings[name] = std::move(v);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+// Recursively build the SubgraphDesc list for a control-flow node's body subgraphs (If/Scan/Loop).
+// `ctx_input_index` is the FUSED node's runtime I/O boundary — every implicit input a body reads from
+// the enclosing model ultimately bottoms out here. `enclosing_names` are names that resolve as
+// runtime intermediates from an enclosing scope (fused-cluster producers, and enclosing body formal
+// inputs / producers); at run time the control-flow handler leaves those bound in the engine env, so
+// a body reference to one is a plain Src::Intermediate lookup. `enclosing_inits` are constant
+// initializers visible from enclosing scopes. Returns false + `err` on an unresolvable body input.
+bool BuildSubgraphs(const OrtApi& api, Ort::ConstNode cf_node,
+                    const std::unordered_map<std::string, size_t>& ctx_input_index,
+                    const std::unordered_set<std::string>& enclosing_names,
+                    const std::unordered_map<std::string, BodyInit>& enclosing_inits,
+                    std::vector<ort_mlx::SubgraphDesc>& out, std::string& err) {
+  std::vector<Ort::AttrNameSubgraph> subs = cf_node.GetSubgraphs();
+  for (Ort::AttrNameSubgraph& as : subs) {
+    ort_mlx::SubgraphDesc sg;
+    sg.attr_name = as.attr_name;
+    Ort::ConstGraph body = as.sub_graph;
+
+    for (const auto& vi : body.GetInputs()) sg.input_names.push_back(InputName(vi));
+    for (const auto& vo : body.GetOutputs()) sg.output_names.push_back(vo.GetName());
+
+    // Body initializers layered over the enclosing ones (a body may shadow an outer name).
+    std::unordered_map<std::string, BodyInit> inits = enclosing_inits;
+    for (const auto& vi : body.GetInitializers()) {
+      std::string name = vi.GetName();
+      if (name.empty()) continue;
+      Ort::ConstValue value{nullptr};
+      Ort::Status st = vi.GetInitializer(value);
+      if (!st.IsOK() || static_cast<const OrtValue*>(value) == nullptr) continue;
+      auto info = value.GetTensorTypeAndShapeInfo();
+      BodyInit d;
+      d.shape = info.GetShape();
+      d.type = info.GetElementType();
+      d.count = info.GetElementCount();
+      // Copy the bytes: the owning subgraph handle is released when this walk returns.
+      const size_t width = ElementByteSize(d.type);
+      const void* raw = value.GetTensorRawData();
+      if (width == 0 || raw == nullptr) continue;  // unsupported/absent initializer payload
+      const size_t nbytes = d.count * width;
+      d.owned = std::make_shared<std::vector<uint8_t>>(
+          static_cast<const uint8_t*>(raw), static_cast<const uint8_t*>(raw) + nbytes);
+      d.data = d.owned->data();
+      inits[name] = std::move(d);
+    }
+
+    std::vector<Ort::ConstNode> bnodes = body.GetNodes();
+
+    // Producer of each intra-body tensor + formal-input set.
+    std::unordered_map<std::string, size_t> producer;
+    for (size_t k = 0; k < bnodes.size(); ++k) {
+      for (const auto& o : bnodes[k].GetOutputs()) {
+        std::string name = o.GetName();
+        if (!name.empty()) producer.emplace(std::move(name), k);
+      }
+    }
+    std::unordered_set<std::string> formal(sg.input_names.begin(), sg.input_names.end());
+
+    // Names visible to a NESTED control-flow node inside this body: enclosing ∪ formal ∪ producers.
+    std::unordered_set<std::string> child_enclosing = enclosing_names;
+    child_enclosing.insert(formal.begin(), formal.end());
+    for (const auto& kv : producer) child_enclosing.insert(kv.first);
+
+    // Topological order so producers precede consumers (Kahn; falls back to given order on a cycle).
+    std::vector<std::vector<size_t>> succ(bnodes.size());
+    std::vector<size_t> indeg(bnodes.size(), 0);
+    for (size_t j = 0; j < bnodes.size(); ++j) {
+      std::unordered_set<size_t> seen;
+      for (const auto& in : bnodes[j].GetInputs()) {
+        std::string name = InputName(in);
+        if (name.empty()) continue;
+        auto it = producer.find(name);
+        if (it == producer.end() || it->second == j) continue;
+        if (seen.insert(it->second).second) {
+          succ[it->second].push_back(j);
+          ++indeg[j];
+        }
+      }
+    }
+    std::vector<size_t> order;
+    order.reserve(bnodes.size());
+    std::vector<size_t> stk;
+    for (size_t k = 0; k < bnodes.size(); ++k) {
+      if (indeg[k] == 0) stk.push_back(k);
+    }
+    while (!stk.empty()) {
+      size_t u = stk.back();
+      stk.pop_back();
+      order.push_back(u);
+      for (size_t v : succ[u]) {
+        if (--indeg[v] == 0) stk.push_back(v);
+      }
+    }
+    if (order.size() != bnodes.size()) {
+      order.clear();
+      for (size_t k = 0; k < bnodes.size(); ++k) order.push_back(k);
+    }
+
+    for (size_t idx : order) {
+      Ort::ConstNode node = bnodes[idx];
+      ort_mlx::NodeDesc mnd;
+      mnd.op_type = node.GetOperatorType();
+      mnd.domain = node.GetDomain();
+      mnd.since_version = node.GetSinceVersion();
+      CopyScalarAttrs(node, mnd);
+
+      for (const auto& in : node.GetInputs()) {
+        ort_mlx::TensorRef tr;
+        tr.name = InputName(in);
+        if (tr.name.empty()) {
+          tr.source = ort_mlx::Src::Absent;
+        } else if (producer.count(tr.name) || formal.count(tr.name)) {
+          // Produced inside the body, or a formal body input the handler binds before translating.
+          tr.source = ort_mlx::Src::Intermediate;
+        } else if (auto ii = inits.find(tr.name); ii != inits.end()) {
+          tr.source = ort_mlx::Src::Initializer;
+          tr.init_data = ii->second.data;
+          tr.init_owned = ii->second.owned;  // keeps copied body-initializer bytes alive
+          tr.init_shape = ii->second.shape;
+          tr.init_type = ii->second.type;
+          tr.init_count = ii->second.count;
+        } else if (auto ci = ctx_input_index.find(tr.name); ci != ctx_input_index.end()) {
+          // Implicit input from the enclosing model — read from the fused node's runtime boundary.
+          tr.source = ort_mlx::Src::CtxInput;
+          tr.ctx_index = ci->second;
+        } else if (enclosing_names.count(tr.name)) {
+          // Implicit input produced in an enclosing scope; left bound in the engine env at run time.
+          tr.source = ort_mlx::Src::Intermediate;
+        } else {
+          err = "MetalEP could not resolve control-flow body input " + tr.name;
+          return false;
+        }
+        mnd.inputs.push_back(std::move(tr));
+      }
+
+      for (const auto& o : node.GetOutputs()) {
+        ort_mlx::OutRef oref;
+        oref.name = o.GetName();
+        auto tinfo = o.TypeInfo();
+        if (tinfo.GetONNXType() == ONNX_TYPE_TENSOR) {
+          oref.type = tinfo.GetTensorTypeAndShapeInfo().GetElementType();
+        }
+        mnd.outputs.push_back(std::move(oref));  // body outputs are never external ctx outputs
+      }
+
+      size_t nsub = 0;
+      Ort::Status ss{api.Node_GetNumSubgraphs(static_cast<const OrtNode*>(node), &nsub)};
+      if (ss.IsOK() && nsub > 0) {
+        if (!BuildSubgraphs(api, node, ctx_input_index, child_enclosing, inits, mnd.subgraphs,
+                            err)) {
+          return false;
+        }
+      }
+
+      sg.nodes.push_back(std::move(mnd));
+    }
+    out.push_back(std::move(sg));
+  }
+  return true;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -196,12 +431,21 @@ std::vector<std::vector<size_t>> BuildConvexClusters(const std::vector<Ort::Cons
     reach_bits[i] = reach[i];
   }
 
-  // Candidate merge edges: direct data edges between two supported nodes.
+  // Candidate merge edges: direct data edges between two supported nodes. Control-flow nodes
+  // (If/Scan/Loop) are kept as SINGLETON clusters — never merged with a neighbor — so at Compile
+  // their inputs (the If `cond`, the Loop `M`, and every implicit body input) resolve from the fused
+  // node's runtime boundary (a ctx input or initializer) rather than an intra-cluster intermediate.
+  // That keeps `cond`/`M` host-readable (RawHost) for branch selection / static unroll and keeps the
+  // recursive body translation's implicit-input resolution simple. See ops/controlflow.cc.
+  auto is_control_flow = [&](size_t i) -> bool {
+    const std::string op = nodes[i].GetOperatorType();
+    return op == "If" || op == "Scan" || op == "Loop";
+  };
   std::vector<std::pair<size_t, size_t>> edges;
   for (size_t u = 0; u < n; ++u) {
-    if (!supported[u]) continue;
+    if (!supported[u] || is_control_flow(u)) continue;
     for (size_t v : succ[u]) {
-      if (supported[v]) edges.emplace_back(u, v);
+      if (supported[v] && !is_control_flow(v)) edges.emplace_back(u, v);
     }
   }
 
@@ -333,9 +577,28 @@ OrtStatus* ORT_API_CALL MetalEp::GetCapabilityImpl(OrtEp* this_ptr, const OrtGra
     std::vector<Ort::ConstNode> nodes = graph.GetNodes();
     const size_t total = nodes.size();
 
+    // Control-flow support (If/Scan/Loop): ORT partitions bottom-up, presenting a control-flow
+    // node's body subgraphs to GetCapability BEFORE the parent graph that owns the node. If we let
+    // the body's ops be claimed independently, ORT fuses them away and the parent node's subgraph is
+    // no longer translatable as a unit. So when this graph is the body of a control-flow node we can
+    // translate WHOLE (ort_mlx::Claimable on the parent accepts it — see ops/controlflow.cc), we
+    // decline ALL body nodes here, leaving the body intact. We then claim the control-flow node
+    // itself at the parent level and recursively translate its body via Node_GetSubgraphs in Compile.
+    // If the parent is a control-flow op we CANNOT translate, we fall through to normal claiming so
+    // the body's ops still run on MLX (with the control-flow node itself left on ORT CPU).
+    bool in_translatable_cf_body = false;
+    {
+      const OrtNode* parent_raw = nullptr;
+      Ort::Status pst{ep->ort_api.Graph_GetParentNode(ort_graph, &parent_raw)};
+      if (pst.IsOK() && parent_raw != nullptr) {
+        Ort::ConstNode parent{parent_raw};
+        in_translatable_cf_body = NodeClaimable(parent, ep->config_);
+      }
+    }
+
     std::vector<char> supported(total, 0);
     for (size_t i = 0; i < total; ++i) {
-      supported[i] = NodeClaimable(nodes[i], ep->config_) ? 1 : 0;
+      supported[i] = (!in_translatable_cf_body && NodeClaimable(nodes[i], ep->config_)) ? 1 : 0;
     }
 
     const bool fuse = std::getenv("ONNX_GENAI_METAL_EP_NOFUSE") == nullptr;
@@ -564,6 +827,34 @@ OrtStatus* ORT_API_CALL MetalEp::CompileImpl(OrtEp* this_ptr, const OrtGraph** g
             }
           }
           mnd.outputs.push_back(std::move(o));
+        }
+
+        // Control-flow node (If/Scan/Loop): recursively capture its body subgraphs so the handler
+        // can translate them inline. Implicit inputs bottom out at this fused node's ctx boundary
+        // (ctx_input_index) or an intra-cluster producer (an enclosing runtime intermediate); body
+        // initializers layer over the fused graph's initializers.
+        {
+          size_t nsub = 0;
+          Ort::Status ss{
+              ep->ort_api.Node_GetNumSubgraphs(static_cast<const OrtNode*>(node), &nsub)};
+          if (ss.IsOK() && nsub > 0) {
+            std::unordered_set<std::string> enclosing_names;
+            for (const auto& kv : producer) enclosing_names.insert(kv.first);
+            std::unordered_map<std::string, BodyInit> enclosing_inits;
+            for (const auto& kv : initializers) {
+              BodyInit bi;
+              bi.data = kv.second.data;
+              bi.shape = kv.second.shape;
+              bi.type = kv.second.type;
+              bi.count = kv.second.count;
+              enclosing_inits.emplace(kv.first, std::move(bi));
+            }
+            std::string sub_err;
+            if (!BuildSubgraphs(ep->ort_api, node, ctx_input_index, enclosing_names,
+                                enclosing_inits, mnd.subgraphs, sub_err)) {
+              return ep->ort_api.CreateStatus(ORT_EP_FAIL, sub_err.c_str());
+            }
+          }
         }
 
         mlx_nodes.push_back(std::move(mnd));

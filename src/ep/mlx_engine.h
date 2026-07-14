@@ -166,6 +166,13 @@ class TranslationContext {
   // Raw host bytes of a constant weight/scale tensor.
   HostBytes RawHost(const TensorRef& ref);
 
+  // Translate a control-flow body subgraph inline: bind its formal inputs to `inputs` (positional),
+  // dispatch every body node through the registry with a scoped env layered over the current env
+  // (so body-internal names shadow, and implicit inputs fall through to the enclosing scope), then
+  // return the MLX arrays bound to the body's formal outputs. The env is restored afterward, so the
+  // same body can be run repeatedly (e.g. unrolled Scan/Loop iterations). Used by ops/controlflow.cc.
+  std::vector<mlx_array> RunSubgraph(const SubgraphDesc& sg, const std::vector<mlx_array>& inputs);
+
   mlx_stream stream() const { return s_; }
 
   static std::vector<int> ToInt(const std::vector<int64_t>& v);

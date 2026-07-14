@@ -38,8 +38,13 @@ struct TensorRef {
   // True when a CtxInput is actually a hoisted constant initializer (weights/scales/caches). The
   // translator wraps/repacks it once from live ctx data and caches it persistently on the plan.
   bool constant = false;
-  // Initializer payload (session-owned; valid for the session lifetime).
+  // Initializer payload. `init_data` points either at session-owned memory (fused-graph
+  // initializers, valid for the session lifetime) or into `init_owned` when set. Control-flow body
+  // initializers are reached through a subgraph handle that ORT releases once the body has been
+  // walked, so their bytes are COPIED into `init_owned` (a shared_ptr keeps the buffer alive across
+  // NodeDesc copies for the plan's lifetime).
   const void* init_data = nullptr;
+  std::shared_ptr<std::vector<uint8_t>> init_owned;
   std::vector<int64_t> init_shape;
   ONNXTensorElementDataType init_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
   size_t init_count = 0;
@@ -51,6 +56,22 @@ struct OutRef {
   bool external = false;  // a subgraph boundary output routed to ctx.GetOutput(ctx_index)
   size_t ctx_index = 0;
   ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+};
+
+struct NodeDesc;  // forward-declared: a control-flow body carries its own NodeDesc list.
+
+// A control-flow node's body subgraph (If then/else branch, Scan/Loop body), captured so the
+// translator can realize the control flow by translating the body inline. `input_names` and
+// `output_names` are the body graph's FORMAL inputs/outputs (positional); the control-flow handler
+// binds inputs before translating the body and reads the outputs afterward. `nodes` are the body's
+// nodes in topological order, whose input TensorRefs already resolve against the body scope with a
+// fall-through to the enclosing scope (implicit inputs). See ep.cc::BuildSubgraphs and
+// ops/controlflow.cc.
+struct SubgraphDesc {
+  std::string attr_name;                    // "then_branch" / "else_branch" / "body"
+  std::vector<std::string> input_names;     // formal body inputs (positional)
+  std::vector<std::string> output_names;    // formal body outputs (positional)
+  std::vector<NodeDesc> nodes;              // topo-ordered body nodes
 };
 
 // One ONNX node with just the metadata the MLX translator needs.
@@ -73,6 +94,9 @@ struct NodeDesc {
   std::unordered_map<std::string, std::string> strings;               // ORT_OP_ATTR_STRING
   std::vector<TensorRef> inputs;
   std::vector<OutRef> outputs;
+  // Body subgraphs for a control-flow node (If/Scan/Loop). Empty for every ordinary op. Populated
+  // recursively in ep.cc::BuildSubgraphs so the control-flow handler can translate the body inline.
+  std::vector<SubgraphDesc> subgraphs;
 };
 
 // Claim-time membership check: can the MLX backend translate (domain, op_type) at this opset? Backed

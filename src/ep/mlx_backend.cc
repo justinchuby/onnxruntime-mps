@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <unordered_set>
 
 #include "mlx/c/mlx.h"
 #include "mlx_engine.h"
@@ -88,7 +90,59 @@ HostBytes TranslationContext::RawHost(const TensorRef& ref) {
   return h;
 }
 
-// ---- input resolution -----------------------------------------------------------------------
+// Translate a control-flow body inline. See mlx_engine.h. Body-internal names shadow the enclosing
+// env for the duration of the body (restored afterward), so unrolled iterations don't leak state and
+// implicit inputs (names referenced but not produced/bound in the body) still resolve from the outer
+// scope. The returned arrays are Kept() by the body node handlers, so they stay live for the rest of
+// the forward even after the env bindings are removed here.
+std::vector<mlx_array> TranslationContext::RunSubgraph(const SubgraphDesc& sg,
+                                                       const std::vector<mlx_array>& inputs) {
+  if (inputs.size() != sg.input_names.size()) {
+    throw MlxError("MLX RunSubgraph: input arity mismatch for body '" + sg.attr_name + "'");
+  }
+  // Names this body binds (formal inputs + every produced output). Snapshot any shadowed outer
+  // bindings so we can restore them once the body has been translated.
+  std::unordered_set<std::string> body_names;
+  for (const auto& nm : sg.input_names) {
+    if (!nm.empty()) body_names.insert(nm);
+  }
+  for (const NodeDesc& n : sg.nodes) {
+    for (const OutRef& o : n.outputs) {
+      if (!o.name.empty()) body_names.insert(o.name);
+    }
+  }
+  std::unordered_map<std::string, mlx_array> saved;
+  for (const auto& nm : body_names) {
+    auto it = env_.find(nm);
+    if (it != env_.end()) saved.emplace(nm, it->second);
+  }
+
+  // Bind formal inputs, then translate the body in topological order.
+  for (size_t i = 0; i < sg.input_names.size(); ++i) {
+    if (!sg.input_names[i].empty()) env_[sg.input_names[i]] = inputs[i];
+  }
+  for (const NodeDesc& n : sg.nodes) {
+    Translate(n);
+  }
+
+  // Collect the body's formal outputs (before restoring the env).
+  std::vector<mlx_array> outs;
+  outs.reserve(sg.output_names.size());
+  for (const auto& on : sg.output_names) {
+    auto it = env_.find(on);
+    if (it == env_.end()) {
+      throw MlxError("MLX RunSubgraph: body '" + sg.attr_name + "' did not produce output " + on);
+    }
+    outs.push_back(it->second);
+  }
+
+  // Restore the enclosing scope: drop everything the body bound, then re-add shadowed outer values.
+  for (const auto& nm : body_names) env_.erase(nm);
+  for (const auto& kv : saved) env_[kv.first] = kv.second;
+  return outs;
+}
+
+
 // Intermediate -> produced env; CtxInput -> wrap ORT input (per-run); Initializer -> wrap raw once
 // and cache persistently on the plan (gammas, biases, cos/sin, embedding table, ...). Each tensor is
 // wrapped with its ACTUAL dtype via MlxDtypeFromOnnx, so fp16/bf16/int graphs flow through unchanged.
@@ -585,15 +639,30 @@ bool TranslationContext::ExecuteCompiledDecode() {
 // ---- public plan API ------------------------------------------------------------------------
 
 Plan* BuildPlan(std::vector<NodeDesc> nodes, std::string& error) {
-  for (const NodeDesc& n : nodes) {
-    // Consult the SAME registry the translator dispatches through — a claimed subgraph containing an
-    // unregistered op is a hard error (there is no hand-kernel fallback).
-    if (!OpRegistry::Instance().Find(n.domain, n.op_type, n.since_version)) {
-      error = "MLX backend cannot translate op '" +
-              (n.domain.empty() ? std::string("ai.onnx") : n.domain) + "::" + n.op_type + "'";
-      return nullptr;
+  // Recursively verify every op has a registered translation — a claimed subgraph containing an
+  // unregistered op is a hard error (there is no hand-kernel fallback). Control-flow nodes carry
+  // their body subgraphs, whose ops must be validated too. Also reports whether any node is a
+  // control-flow node (they build a data-dependent graph each forward, so the compiled decode
+  // fast-path — which assumes a structurally invariant graph — must be disabled).
+  bool has_control_flow = false;
+  std::function<bool(const std::vector<NodeDesc>&)> validate =
+      [&](const std::vector<NodeDesc>& ns) -> bool {
+    for (const NodeDesc& n : ns) {
+      if (!OpRegistry::Instance().Find(n.domain, n.op_type, n.since_version)) {
+        error = "MLX backend cannot translate op '" +
+                (n.domain.empty() ? std::string("ai.onnx") : n.domain) + "::" + n.op_type + "'";
+        return false;
+      }
+      if (!n.subgraphs.empty()) {
+        has_control_flow = true;
+        for (const SubgraphDesc& sg : n.subgraphs) {
+          if (!validate(sg.nodes)) return false;
+        }
+      }
     }
-  }
+    return true;
+  };
+  if (!validate(nodes)) return nullptr;
   // Bound MLX's caching allocator so it coexists with our MTLBuffer pool (memory-safety note).
   size_t prev = 0;
   mlx_set_cache_limit(&prev, static_cast<size_t>(512) << 20);  // 512 MB cache cap
@@ -602,8 +671,9 @@ Plan* BuildPlan(std::vector<NodeDesc> nodes, std::string& error) {
   plan->nodes = std::move(nodes);
   plan->prof.enabled = std::getenv("ONNX_GENAI_MLX_PROFILE") != nullptr;
   // Compiled decode fast-path on by default; ONNX_GENAI_MLX_COMPILE=0 forces the eager path (A/B).
+  // Control-flow plans always take the eager path (their graph structure depends on runtime data).
   const char* ce = std::getenv("ONNX_GENAI_MLX_COMPILE");
-  plan->compile_enabled = !(ce && ce[0] == '0');
+  plan->compile_enabled = !has_control_flow && !(ce && ce[0] == '0');
   return plan;
 }
 

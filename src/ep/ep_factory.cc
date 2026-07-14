@@ -7,16 +7,16 @@
 
 #include "allocator.h"
 #include "ep.h"
-#include "onnxruntime_mps/version.h"
+#include "onnxruntime_mlx/version.h"
 
 MetalEpFactory::MetalEpFactory(const char* registration_name, ApiPtrs apis,
                                const OrtLogger& default_logger)
     : OrtEpFactory{},
       ApiPtrs(apis),
-      ep_name_{registration_name && *registration_name ? registration_name : ORT_MPS_EP_NAME},
-      vendor_{ORT_MPS_EP_VENDOR},
-      vendor_id_{ORT_MPS_EP_VENDOR_ID},
-      ep_version_{ORT_MPS_EP_VERSION},
+      ep_name_{registration_name && *registration_name ? registration_name : ORT_MLX_EP_NAME},
+      vendor_{ORT_MLX_EP_VENDOR},
+      vendor_id_{ORT_MLX_EP_VENDOR_ID},
+      ep_version_{ORT_MLX_EP_VERSION},
       default_logger_{default_logger} {
   ort_version_supported = ORT_API_VERSION;
 
@@ -36,7 +36,7 @@ MetalEpFactory::MetalEpFactory(const char* registration_name, ApiPtrs apis,
   // Bring up Metal. If this fails the factory is still returned so the library loads, but the
   // EP will report no supported devices (ORT then runs everything on CPU).
   std::string err;
-  metal_ = ort_mps::MetalContext::Create(err);
+  metal_ = ort_mlx::MetalContext::Create(err);
   {
     const OrtApi& ort_api_ = ort_api;
     const OrtLogger* logger_ = &default_logger_;
@@ -51,14 +51,14 @@ MetalEpFactory::MetalEpFactory(const char* registration_name, ApiPtrs apis,
   // MTLBuffers whose contents are CPU-addressable, so the data transfer is a memcpy.
   default_memory_info_ = Ort::MemoryInfo{"MLXExecutionProvider_Buffer",
                                          OrtMemoryInfoDeviceType_GPU,
-                                         ORT_MPS_EP_VENDOR_ID, /*device_id*/ 0,
+                                         ORT_MLX_EP_VENDOR_ID, /*device_id*/ 0,
                                          OrtDeviceMemoryType_DEFAULT,
                                          /*alignment*/ 0,
                                          OrtAllocatorType::OrtDeviceAllocator};
 
   readonly_memory_info_ = Ort::MemoryInfo{"MLXExecutionProvider_Buffer_readonly",
                                           OrtMemoryInfoDeviceType_GPU,
-                                          ORT_MPS_EP_VENDOR_ID, /*device_id*/ 0,
+                                          ORT_MLX_EP_VENDOR_ID, /*device_id*/ 0,
                                           OrtDeviceMemoryType_DEFAULT,
                                           /*alignment*/ 0,
                                           OrtAllocatorType::OrtReadOnlyAllocator};

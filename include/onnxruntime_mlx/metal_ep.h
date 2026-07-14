@@ -15,9 +15,9 @@
 // it has no include guard so it must not be included a second time.
 
 #ifdef __APPLE__
-#define ORT_MPS_EXPORT __attribute__((visibility("default")))
+#define ORT_MLX_EXPORT __attribute__((visibility("default")))
 #else
-#define ORT_MPS_EXPORT
+#define ORT_MLX_EXPORT
 #endif
 
 #ifdef __cplusplus
@@ -26,7 +26,7 @@ extern "C" {
 
 // Creates the OrtEpFactory instances provided by this library.
 // Matches CreateEpApiFactoriesFn from onnxruntime_ep_c_api.h (since ORT 1.22).
-ORT_MPS_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
+ORT_MLX_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
                                             const OrtApiBase* ort_api_base,
                                             const OrtLogger* default_logger,
                                             OrtEpFactory** factories,
@@ -35,7 +35,7 @@ ORT_MPS_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
 
 // Releases an OrtEpFactory previously returned by CreateEpFactories.
 // Matches ReleaseEpApiFactoryFn from onnxruntime_ep_c_api.h (since ORT 1.22).
-ORT_MPS_EXPORT OrtStatus* ReleaseEpFactory(OrtEpFactory* factory);
+ORT_MLX_EXPORT OrtStatus* ReleaseEpFactory(OrtEpFactory* factory);
 
 #ifdef __cplusplus
 }  // extern "C"

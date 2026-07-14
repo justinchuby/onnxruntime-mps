@@ -15,7 +15,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace ort_mps {
+namespace ort_mlx {
 
 struct MetalContext::Impl {
   id<MTLDevice> device = nil;
@@ -85,4 +85,4 @@ void MetalContext::Free(void* ptr) {
   }
 }
 
-}  // namespace ort_mps
+}  // namespace ort_mlx

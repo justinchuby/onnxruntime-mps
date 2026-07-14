@@ -7,7 +7,7 @@
 #include "onnxruntime_cxx_api.h"
 #undef ORT_API_MANUAL_INIT
 
-#include "onnxruntime_mps/metal_ep.h"
+#include "onnxruntime_mlx/metal_ep.h"
 
 #include <memory>
 
@@ -15,7 +15,7 @@
 
 extern "C" {
 
-ORT_MPS_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
+ORT_MLX_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
                                             const OrtApiBase* ort_api_base,
                                             const OrtLogger* default_logger,
                                             OrtEpFactory** factories,
@@ -44,7 +44,7 @@ ORT_MPS_EXPORT OrtStatus* CreateEpFactories(const char* registration_name,
   return nullptr;
 }
 
-ORT_MPS_EXPORT OrtStatus* ReleaseEpFactory(OrtEpFactory* factory) {
+ORT_MLX_EXPORT OrtStatus* ReleaseEpFactory(OrtEpFactory* factory) {
   delete static_cast<MetalEpFactory*>(factory);
   return nullptr;
 }

@@ -11,7 +11,7 @@
 #include "plugin_ep_utils.h"
 
 struct MetalAllocator : OrtAllocator {
-  MetalAllocator(const OrtMemoryInfo* memory_info, std::shared_ptr<ort_mps::MetalContext> metal)
+  MetalAllocator(const OrtMemoryInfo* memory_info, std::shared_ptr<ort_mlx::MetalContext> metal)
       : memory_info_(memory_info), metal_(std::move(metal)) {
     version = ORT_API_VERSION;
     Alloc = AllocImpl;
@@ -35,5 +35,5 @@ struct MetalAllocator : OrtAllocator {
   // Shared ownership: the allocator keeps the MetalContext alive as long as it (and the tensors it
   // frees through it) exist, even if the factory is released first — prevents a teardown
   // use-after-free in FreeImpl -> metal_->Free().
-  std::shared_ptr<ort_mps::MetalContext> metal_;
+  std::shared_ptr<ort_mlx::MetalContext> metal_;
 };

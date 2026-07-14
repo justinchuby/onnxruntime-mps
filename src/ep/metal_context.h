@@ -16,7 +16,7 @@
 #include <memory>
 #include <string>
 
-namespace ort_mps {
+namespace ort_mlx {
 
 // Owns id<MTLDevice> and the address -> MTLBuffer map for the shared unified-memory pool.
 // One instance per EP factory.
@@ -48,4 +48,4 @@ class MetalContext {
   std::string device_name_;
 };
 
-}  // namespace ort_mps
+}  // namespace ort_mlx

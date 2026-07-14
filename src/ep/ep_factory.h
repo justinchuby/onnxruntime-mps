@@ -18,7 +18,7 @@ class MetalEpFactory : public OrtEpFactory, public ApiPtrs {
   MetalEpFactory(const char* registration_name, ApiPtrs apis, const OrtLogger& default_logger);
 
   const OrtMemoryInfo* GetDefaultMemoryInfo() const { return default_memory_info_; }
-  ort_mps::MetalContext* Metal() const { return metal_.get(); }
+  ort_mlx::MetalContext* Metal() const { return metal_.get(); }
   const OrtLogger& DefaultLogger() const { return default_logger_; }
 
  private:
@@ -63,7 +63,7 @@ class MetalEpFactory : public OrtEpFactory, public ApiPtrs {
   const std::string ep_version_;
   const OrtLogger& default_logger_;
 
-  std::shared_ptr<ort_mps::MetalContext> metal_;
+  std::shared_ptr<ort_mlx::MetalContext> metal_;
 
   Ort::MemoryInfo default_memory_info_{nullptr};
   Ort::MemoryInfo readonly_memory_info_{nullptr};

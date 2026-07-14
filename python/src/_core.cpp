@@ -18,7 +18,7 @@
 
 #include <string>
 
-#include "onnxruntime_mps/version.h"
+#include "onnxruntime_mlx/version.h"
 
 namespace nb = nanobind;
 
@@ -56,13 +56,13 @@ std::string library_path() {
 NB_MODULE(_core, m) {
   m.doc() = "Native helpers for the MLX ONNX Runtime execution-provider plugin.";
 
-  m.def("ep_name", []() { return std::string(ORT_MPS_EP_NAME); },
+  m.def("ep_name", []() { return std::string(ORT_MLX_EP_NAME); },
         "Registered execution-provider name (pass to register_execution_provider_library).");
 
-  m.def("version", []() { return std::string(ORT_MPS_EP_VERSION); },
+  m.def("version", []() { return std::string(ORT_MLX_EP_VERSION); },
         "Version string of the bundled MLX execution-provider plugin.");
 
-  m.def("vendor", []() { return std::string(ORT_MPS_EP_VENDOR); },
+  m.def("vendor", []() { return std::string(ORT_MLX_EP_VENDOR); },
         "Vendor string of the plugin.");
 
   m.def("library_path", &library_path,

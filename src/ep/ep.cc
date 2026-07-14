@@ -299,7 +299,7 @@ struct SubgraphNodeComputeInfo : NodeComputeInfoBase {
 // ---------------------------------------------------------------------------
 
 MetalEp::MetalEp(MetalEpFactory& factory, const std::string& name, const Config& config,
-                 std::shared_ptr<ort_mps::MetalContext> metal, const OrtLogger& logger)
+                 std::shared_ptr<ort_mlx::MetalContext> metal, const OrtLogger& logger)
     : OrtEp{},
       ApiPtrs{static_cast<const ApiPtrs&>(factory)},
       factory_{factory},

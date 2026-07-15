@@ -503,6 +503,15 @@ pub struct TranslationContext<'a> {
     /// writes the new K/V in place at the valid-past offset and masks the buffer tail). Mirrors
     /// `plan.compiled.shared_kv`; only meaningful while `rope_dynamic` is set.
     shared_kv: bool,
+    /// True when the compiled trace is SHAPE-KEYED (prefill) rather than shapeless (decode). In this
+    /// mode the query length `S` and `valid_past` are fixed for the shape key, so the shared-buffer
+    /// attention can be STATICALLY narrowed to the valid prefix `[0, valid_past+S)` (a static slice +
+    /// causal SDPA) instead of masking over the full KV capacity. Only meaningful with `rope_dynamic`.
+    compiled_shape_keyed: bool,
+    /// The static `valid_past` (number of already-valid KV rows) for a shape-keyed compiled trace —
+    /// known per shape key because the `attention_mask` width (= `valid_past + S`) is part of the key.
+    /// Only meaningful when `compiled_shape_keyed` is set.
+    compiled_valid_past: i32,
     /// Shared-buffer KV `present` outputs (name -> delta) for the EAGER path: only the `count` new
     /// rows at `offset` need copying back (the rest already alias correct `past` rows). Empty on the
     /// growing path so its copy-out stays a full, bit-for-bit-unchanged memcpy.
@@ -536,6 +545,8 @@ impl<'a> TranslationContext<'a> {
             trace_enabled: crate::trace::tracer().is_enabled(),
             rope_dynamic: false,
             shared_kv: false,
+            compiled_shape_keyed: false,
+            compiled_valid_past: 0,
             kv_deltas: HashMap::new(),
             in_general_trace: false,
             compiled_kv_present: Vec::new(),
@@ -1255,10 +1266,27 @@ impl<'a> TranslationContext<'a> {
 
     /// Put this context into the compiled-decode/prefill TRACE mode (`rope_dynamic = true`), recording
     /// whether the session drives a shared KV buffer. Used by the unified core while building the
-    /// closure body (replaces the old decode-only `new_trace`).
-    pub(crate) fn set_compiled_trace(&mut self, shared_kv: bool) {
+    /// closure body (replaces the old decode-only `new_trace`). `shape_keyed` marks a prefill trace
+    /// (static shapes for the key); `valid_past` is the static valid-past for that key (only used when
+    /// `shape_keyed` is set, to statically narrow the shared-buffer attention to the valid prefix).
+    pub(crate) fn set_compiled_trace(&mut self, shared_kv: bool, shape_keyed: bool, valid_past: i32) {
         self.rope_dynamic = true;
         self.shared_kv = shared_kv;
+        self.compiled_shape_keyed = shape_keyed;
+        self.compiled_valid_past = valid_past;
+    }
+
+    /// True while translating inside a SHAPE-KEYED compiled (prefill) trace — the shared-buffer
+    /// attention can be statically narrowed to the valid prefix. Only meaningful with `rope_dynamic`.
+    #[inline]
+    pub fn compiled_shape_keyed(&self) -> bool {
+        self.compiled_shape_keyed
+    }
+
+    /// The static `valid_past` for a shape-keyed compiled (prefill) trace (see `compiled_shape_keyed`).
+    #[inline]
+    pub fn compiled_valid_past(&self) -> i32 {
+        self.compiled_valid_past
     }
 
     /// Mark this context as a GENERAL compiled-subgraph trace (see [`Self::in_general_trace`]).

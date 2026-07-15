@@ -403,9 +403,15 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
     // decode trace cannot eval mid-graph, so it takes the mode from the once-detected plan flag
     // (`ctx.shared_kv()`) and drives the in-place write with a DATA offset instead (see below).
     let (shared_buffer, valid_past) = if ctx.rope_dynamic() {
-        // valid_past (int) is unused on the compiled path: RoPE uses the pre-sliced synth rows and
-        // the KV write/mask use a data offset derived from total_sequence_length.
-        (ctx.shared_kv(), cap)
+        // valid_past (int) is unused on the shapeless compiled DECODE path: RoPE uses the pre-sliced
+        // synth rows and the KV write/mask use a data offset derived from total_sequence_length. On
+        // the shape-keyed compiled PREFILL path valid_past IS static (known per shape key), so use it
+        // to narrow the attention to the valid prefix below.
+        if ctx.compiled_shape_keyed() {
+            (ctx.shared_kv(), ctx.compiled_valid_past())
+        } else {
+            (ctx.shared_kv(), cap)
+        }
     } else {
         let ts = ctx.resolve(&n.inputs[6])?;
         let total = ctx.read_scalar_i64(ts)? as i32;
@@ -472,12 +478,27 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
     //     [B,kv,cap,hd] buffer via slice_update, emit present at the FULL cap shape (matches ORT's
     //     pre-bound shared output), and attend over the valid prefix [0, valid_past+S) so causal
     //     alignment places the S queries at their true positions [valid_past, valid_past+S).
-    //   * Shared-buffer, COMPILED: same, but valid_past is DATA (total_sequence_length - S), so the
-    //     write is a slice_update_dynamic at that offset and attention uses a static-shape additive
-    //     mask over the whole cap buffer (the tail beyond valid_past+S masked to -inf). Keeping every
-    //     op statically shaped lets the shapeless compiled closure express it.
+    //   * Shared-buffer, COMPILED PREFILL (shape-keyed): valid_past + S are static for the shape key,
+    //     so narrow exactly like the eager path — write the S new rows in place at
+    //     [valid_past, valid_past+S), then attend over only the valid prefix [0, valid_past+S) under a
+    //     causal SDPA (STATIC slices, no full-cap mask). This drops the compute-bound full-capacity
+    //     attention that made prefill-compile a TTFT regression while staying byte-identical to eager.
+    //   * Shared-buffer, COMPILED DECODE (shapeless): valid_past is DATA (total_sequence_length - S),
+    //     so the write is a slice_update_dynamic at that offset and attention uses a static-shape
+    //     additive mask over the whole cap buffer (the tail beyond valid_past+S masked to -inf).
+    //     Keeping every op statically shaped lets the shapeless compiled closure express it.
     //   * Growing: concat past+new along the sequence axis (unchanged legacy behavior).
-    let (present_k, present_v, attn) = if shared_buffer && ctx.rope_dynamic() {
+    let (present_k, present_v, attn) = if shared_buffer && ctx.rope_dynamic() && ctx.compiled_shape_keyed() {
+        let start = [0, 0, valid_past, 0];
+        let stop = [b, kv_heads, valid_past + s, head];
+        let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
+        let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
+        let vp1 = valid_past + s;
+        let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+        let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+        let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
+        (pk, pv, attn)
+    } else if shared_buffer && ctx.rope_dynamic() {
         gqa_shared_compiled(ctx, n, past_k, past_v, kh, vh, qh, s, cap, scale)?
     } else if shared_buffer {
         let start = [0, 0, valid_past, 0];

@@ -93,19 +93,18 @@ pub fn general_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
 /// same decoder subgraph as decode but at query length S>1, so it needs a `GroupQueryAttention` node
 /// (the RoPE/KV machinery build declines otherwise) and no control-flow.
 ///
-/// OPT-IN by default (`MLX_EP_PREFILL_COMPILE=1` to enable). The compiled shared-buffer path runs
-/// SDPA over the full KV capacity with a causal mask, whereas the eager prefill attends only the
-/// valid prefix `[0, S)`. For decode (S=1, launch-bound) kernel fusion dominates and wins; for
-/// prefill (S large, compute-bound) the full-cap attention outweighs the fusion saving and is a
-/// measured ~15-20% TTFT regression. Correct (byte-identical to eager) but not yet a win, so it
-/// stays behind an opt-in flag to preserve the eager-fallback discipline until the attention is
-/// narrowed to the valid prefix. Also honours the global compile kill-switch. The build itself
+/// DEFAULT ON. The shape-keyed prefill trace statically narrows attention to the valid prefix
+/// `[0, valid_past+S)` (S and valid_past are fixed per shape key), so it no longer runs SDPA over the
+/// full KV capacity — the compute-bound waste that made it a ~15-20% TTFT regression. With the
+/// narrowing it is byte-identical to eager AND beats eager TTFT, so it is enabled by default. The
+/// kill-switch `MLX_EP_NO_PREFILL_COMPILE=1` forces eager prefill (A/B numerical validation / safety)
+/// without touching the decode path. Also honours the global compile kill-switch. The build itself
 /// falls back to eager for any non-decoder / partial-rotary shape.
 pub fn prefill_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
     if !compile_enabled(has_control_flow) {
         return false;
     }
-    if !std::env::var_os("MLX_EP_PREFILL_COMPILE")
+    if std::env::var_os("MLX_EP_NO_PREFILL_COMPILE")
         .map(|v| v != "0" && !v.is_empty())
         .unwrap_or(false)
     {
@@ -677,13 +676,35 @@ fn trace_body(
         )
     };
 
+    // Shape-keyed (prefill) shared-buffer traces know `valid_past` statically for this shape key (the
+    // attention_mask width = valid_past + S is part of the key). Recover it here from the live ctx so
+    // the compiled attention can be narrowed to the valid prefix `[0, valid_past+S)` instead of masked
+    // over the full KV capacity. Only enable the narrow path when valid_past is reliably known (mask
+    // width available and non-negative); otherwise leave `narrow` off so the trace keeps the safe
+    // full-cap masked path. Shapeless (decode) traces feed valid_past as data and never narrow.
+    let mut narrow = false;
+    let mut static_valid_past = 0i32;
+    if matches!(cfg.shape_mode, ShapeMode::ShapeKeyed) && cfg.rope_as_data && shared_kv {
+        let s = detect_seq_len(api, kctx, unsafe { &*plan_ptr }).unwrap_or(1);
+        let mask_idx = slot.get(unsafe { &*plan_ptr }).mask_ctx_index;
+        if mask_idx >= 0 {
+            if let Ok((_d, shape, _t)) = read_ctx_input_raw(api, kctx, mask_idx as usize) {
+                let vp = (*shape.get(1).unwrap_or(&0) as i32) - s;
+                if vp >= 0 {
+                    narrow = true;
+                    static_valid_past = vp;
+                }
+            }
+        }
+    }
+
     let (res_raw, arena, kv_present) = {
         let plan = unsafe { &mut *plan_ptr };
         let mut tc = TranslationContext::new(plan, api, kctx, stream);
         if cfg.rope_as_data {
             // RoPE uses the pre-sliced cos/sin ROW placeholders + a matmul rotate-half, so the graph
             // carries no dynamic Slice (which shapeless `mlx_compile` cannot shape-infer).
-            tc.set_compiled_trace(shared_kv);
+            tc.set_compiled_trace(shared_kv, narrow, static_valid_past);
         } else {
             // General trace: dynamic inputs are shapeless placeholders with no host data, so any
             // mid-graph host eval must fail the trace cleanly (=> eager) rather than eval a tracer.

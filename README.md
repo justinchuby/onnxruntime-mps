@@ -114,14 +114,20 @@ Feed-forward encoders (audio / CNN / vision) are the EP's sweet spot: the whole 
 single MLX closure that is traced + `mlx_compile`d once and replayed, so a static-shape model runs
 end-to-end on the GPU with one dispatch (e.g. Perch: 725/725 nodes claimed, 1 fused subgraph).
 
-For **LLMs**, the EP is primarily a **prefill / TTFT accelerator**: MLX prefill runs
-**1.85–2.77× faster than the CPU EP** and the lead grows with prompt length. Decode is
-weight-bandwidth-bound — on small models the CPU `accuracy_level=4` int8 path is very fast, so decode
-stays competitive-to-CPU-favored there; the MLX decode edge widens on larger models.
+For **LLMs**, the EP is primarily a **prefill / TTFT accelerator**. Qwen2.5-0.5B, same machine, warm:
 
-Any op the EP doesn't claim falls back to the ORT CPU EP, so **every** graph still runs — you only
-ever gain. The audio numbers above are the public Hugging Face Perch v2 / BirdNET ONNX exports, timed
-as the median of 10 warm runs against the CPU EP on the same machine.
+| Phase | CPU EP | MLX EP | Result |
+|---|---:|---:|---|
+| Prefill / TTFT (~280-token prompt) | 294 ms | 74 ms | **MLX 4.0× faster** |
+| Decode (per-token throughput) | 211 tok/s | 105 tok/s | CPU-favored on this small model |
+
+The prefill lead grows with prompt length. Decode is weight-bandwidth-bound: on a small 0.5B model the
+CPU `accuracy_level=4` int8 MatMulNBits path is very fast and wins per-token, so today MLX is the
+clear choice for prompt-heavy / TTFT-sensitive workloads; the decode gap narrows on larger models.
+
+Any op the EP doesn't claim falls back to the ORT CPU EP, so **every** graph still runs correctly —
+the EP is a safe drop-in. The audio numbers above are the public Hugging Face Perch v2 / BirdNET ONNX
+exports, timed as the median of 10 warm runs against the CPU EP on the same machine.
 
 ## Concurrency
 

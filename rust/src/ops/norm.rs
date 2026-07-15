@@ -232,7 +232,12 @@ fn lp_norm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError
         let s = sum_axis(ctx, sq, axis, true)?;
         sqrt(ctx, s)?
     };
-    let out = divide(ctx, x, norm)?;
+    let quot = divide(ctx, x, norm)?;
+    // ONNX LpNormalization: where the norm is 0, emit 0 rather than NaN (0/0). Matches the ONNX
+    // reference `np.where(norm == 0, 0, x / norm)` and ORT's CPU kernel.
+    let zero = scalar_like(ctx, 0.0, ctx.dtype_of(x))?;
+    let is_zero = ctx.binary(mlx::mlx_equal, norm, zero)?;
+    let out = ctx.where_(is_zero, zero, quot)?;
     ctx.mark_composed("LpNormalization composed (abs/sum/sqrt/divide) — no fused norm kernel");
     ctx.bind(&n.outputs[0], out);
     Ok(())

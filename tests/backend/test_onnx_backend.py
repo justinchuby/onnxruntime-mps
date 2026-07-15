@@ -139,6 +139,14 @@ _EXCLUDE = [
     # bias + 3d/4d mask + causal). The *_expanded decompositions pass and are not excluded.
     r"test_attention_4d_diff_heads_mask4d_padded_kv_cpu$",
     r"test_attention_4d_with_past_and_present_qk_matmul_bias_(3d|4d)_mask_causal_cpu$",
+    # --- signal/norm/reduction/recurrent/random family: ORT/ONNX-inherent (fail on pure CPU too) ---
+    # DFT/STFT: ORT's float32 CPU kernel diverges from ONNX's float64 reference at rtol=1e-3.
+    r"^test_dft_",
+    r"^test_stft_",
+    # Bernoulli: non-deterministic RNG can't match fixed reference data; ORT CPU lacks the op form.
+    r"^test_bernoulli_",
+    # RNN/LSTM/GRU batchwise layout: ORT CPU raises during session init (unsupported layout).
+    r"^test_simple_rnn_batchwise_", r"^test_lstm_batchwise_", r"^test_gru_batchwise_",
 ]
 for _pat in _EXCLUDE:
     try:

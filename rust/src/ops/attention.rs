@@ -768,28 +768,28 @@ fn rotary_embedding_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
     let cos_cache = ctx.resolve(&n.inputs[ci])?;
     let sin_cache = ctx.resolve(&n.inputs[si])?;
     let has_pos = present(n, pi);
+    // The fused mlx_fast_rope path derives each position as `offset + s`, i.e. it assumes the
+    // per-row positions are contiguous. That only holds for the [1] offset form (positions =
+    // offset + [0,S)). A 2D [B,S] position_ids tensor may carry arbitrary (non-contiguous)
+    // positions, so it must be served by the composed gather path (which indexes the cos/sin
+    // cache by the exact position_ids). ndim is statically known from the graph shapes.
+    let pos_rank = if has_pos {
+        let p = ctx.resolve(&n.inputs[pi])?;
+        ctx.ndim(p) as i32
+    } else {
+        -1
+    };
+    let fast_ok = has_pos && pos_rank == 1 && is_fp32(ctx, cos_cache);
 
-    let out4 = if has_pos && is_fp32(ctx, cos_cache) {
-        // Standard fp32 [max_seq, half] cache indexed by position_ids: recover the RoPE period and
-        // apply the fused mlx_fast_rope kernel. Positions are contiguous per row (offset + s): the
-        // [1] offset form (com.microsoft) and the [B,S] gather form both start each row at its first
-        // position_id, which is how RoPE position_ids are always laid out.
+    let out4 = if fast_ok {
+        // Standard fp32 [max_seq, half] cache indexed by a [1] position offset: recover the RoPE
+        // period and apply the fused mlx_fast_rope kernel (positions = offset + [0,S)).
         let pos = ctx.resolve(&n.inputs[pi])?;
-        let pos_rank = ctx.ndim(pos) as i32;
         let half = ctx.shape_of(cos_cache)[1];
         let rot = 2 * half;
         let freqs = rope_freqs_from_cache(ctx, cos_cache, sin_cache, half)?;
-
-        let offset = if pos_rank == 2 {
-            // position_ids [B,S] -> per-row start offset [B].
-            let ps = ctx.shape_of(pos);
-            let col = slice(ctx, pos, &[0, 0], &[ps[0], 1])?; // [B,1]
-            let col = ctx.reshape(col, &[ps[0]])?;
-            ctx.astype(col, mlx::mlx_dtype__MLX_INT32)?
-        } else {
-            // position_ids [1] absolute offset (com.microsoft).
-            ctx.astype(pos, mlx::mlx_dtype__MLX_INT32)?
-        };
+        // position_ids [1] absolute offset; MLX applies positions = offset + [0,S).
+        let offset = ctx.astype(pos, mlx::mlx_dtype__MLX_INT32)?;
         fast_rope_dynamic(ctx, x4, rot, interleaved, offset, freqs)?
     } else {
         // Composed fallback for the two forms mlx_fast_rope cannot faithfully reproduce:
@@ -808,10 +808,12 @@ fn rotary_embedding_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
         let sin4 = gather_cache(ctx, sin_cache, pos, pos_rank, s)?;
         let half = ctx.shape_of(cos4)[3];
         let out = rope_apply(ctx, x4, cos4, sin4, half, interleaved)?;
-        ctx.mark_composed(if has_pos {
-            "RotaryEmbedding composed: reduced-precision (fp16/bf16) cos/sin cache — recovered frequencies would drift from the stored values"
-        } else {
-            "RotaryEmbedding composed: absent position_ids supplies an explicit per-position cos/sin cache (no base/scale formula) — mlx_fast_rope not applicable"
+        ctx.mark_composed(match (has_pos, pos_rank) {
+            // [B,S] position_ids may carry arbitrary (non-contiguous) positions, so the cache is
+            // gathered per exact position rather than via the fused offset+s kernel.
+            (true, 2) => "RotaryEmbedding composed: [B,S] position_ids gather (positions may be non-contiguous — mlx_fast_rope's offset+s form does not apply)",
+            (true, _) => "RotaryEmbedding composed: reduced-precision (fp16/bf16) cos/sin cache — recovered frequencies would drift from the stored values",
+            (false, _) => "RotaryEmbedding composed: absent position_ids supplies an explicit per-position cos/sin cache (no base/scale formula) — mlx_fast_rope not applicable",
         });
         out
     };

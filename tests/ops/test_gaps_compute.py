@@ -294,7 +294,35 @@ def test_rotary_embedding_ai(case: tuple) -> None:
     check(model, feeds)
 
 
-# name, B, S, N, hd, interleaved, rot_dim(0=full), layout, pos_offset(None=[B,S] gather)
+# name, B, S, N, hd, interleaved, rot_dim(0=full), layout
+ROPE_AI_NONCONTIG_CASES = [
+    ("4d", 2, 3, 4, 8, 0, 0, "4d"),
+    ("4d-interleaved", 2, 3, 4, 8, 1, 0, "4d"),
+    ("4d-partial", 2, 3, 4, 8, 0, 4, "4d"),
+    ("3d", 2, 3, 4, 8, 0, 0, "3d"),
+]
+
+
+@pytest.mark.parametrize("case", ROPE_AI_NONCONTIG_CASES, ids=[c[0] for c in ROPE_AI_NONCONTIG_CASES])
+def test_rotary_embedding_ai_noncontiguous_pos(case: tuple) -> None:
+    """Regression: [B,S] position_ids may carry arbitrary (non-contiguous) positions.
+
+    The fused mlx_fast_rope path derives each position as ``offset + s`` (contiguous from the
+    row's first id), which is wrong when position_ids are scrambled; the handler must fall back to
+    the per-position cache gather. The stock ai.onnx backend cases only use ``arange(S)`` positions,
+    so this case exercises the non-contiguous path explicitly.
+    """
+    name, B, S, N, hd, interleaved, rot_dim, layout = case
+    max_seq = 50
+    model, feeds = _rope_ai_model(
+        B=B, S=S, N=N, hd=hd, max_seq=max_seq, interleaved=interleaved,
+        rot_dim=rot_dim, layout=layout, with_pos=True,
+    )
+    rng = np.random.default_rng(1234 + interleaved * 7 + rot_dim)
+    feeds["pos"] = np.stack([rng.permutation(max_seq)[:S] for _ in range(B)]).astype(np.int64)
+    if not _cpu_can_run(model, feeds):
+        pytest.skip("ORT CPU cannot run this ai.onnx RotaryEmbedding form")
+    check(model, feeds)
 ROPE_MS_CASES = [
     ("3d-gather", 1, 6, 4, 16, 0, 0, "3d", None),
     ("3d-interleaved", 1, 6, 4, 16, 1, 0, "3d", None),

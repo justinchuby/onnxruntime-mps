@@ -598,6 +598,8 @@ unsafe fn build_plan(
         let has_control_flow = any_control_flow(&nodes);
         let mut plan = Plan::new(nodes);
         plan.compiled.enabled = crate::compiled::compile_enabled(has_control_flow);
+        plan.prefill.enabled =
+            crate::compiled::prefill_enabled(has_control_flow, &plan.nodes);
         plan.general.enabled =
             crate::compiled::general_enabled(has_control_flow, &plan.nodes);
         Ok(plan)
@@ -1236,11 +1238,11 @@ unsafe extern "C" fn compute(
         tr.sample_gpu_counters();
 
         // Compiled-decode fast path: handle single-token (S==1) decode via the once-compiled
-        // shapeless closure; prefill (S>1) and ineligible plans fall through to the eager translator.
+        // shapeless closure; prefill (S>1) is handled by the shape-keyed prefill path below, and
+        // ineligible plans fall through to the eager translator.
         let plan_ptr: *mut Plan = &mut info.plan;
-        if info.plan.compiled.enabled
-            && crate::compiled::detect_seq_len(info.ort_api, kctx, &info.plan) == Some(1)
-        {
+        let seq_len = crate::compiled::detect_seq_len(info.ort_api, kctx, &info.plan);
+        if info.plan.compiled.enabled && seq_len == Some(1) {
             match crate::compiled::try_compiled(plan_ptr, Slot::Decode, info.ort_api, kctx, info.stream) {
                 Ok(true) => {
                     eprintln!(
@@ -1252,6 +1254,27 @@ unsafe extern "C" fn compute(
                 Err(msg) => {
                     let c = CString::new(format!("MLX compiled decode failed: {msg}"))
                         .unwrap_or_else(|_| CString::new("MLX compiled decode failed").unwrap());
+                    return (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr());
+                }
+            }
+        }
+
+        // Compiled-prefill fast path (Phase 2): the SAME decoder subgraph as decode but at query
+        // length S>1. `S` bakes into the trace (causal-mask extent, KV write width), so this uses the
+        // unified core in SHAPE-KEYED mode — it retraces per distinct prompt length and replays the
+        // fused closure for repeats. Declines (=> eager) for any non-decoder / partial-rotary shape.
+        if info.plan.prefill.enabled && matches!(seq_len, Some(s) if s > 1) {
+            match crate::compiled::try_compiled(plan_ptr, Slot::Prefill, info.ort_api, kctx, info.stream) {
+                Ok(true) => {
+                    eprintln!(
+                        "[rust-mlx-ep] Compute: subgraph run via mlx-c COMPILED prefill ({node_count} node(s))"
+                    );
+                    return ptr::null_mut();
+                }
+                Ok(false) => { /* not eligible — fall back to eager below */ }
+                Err(msg) => {
+                    let c = CString::new(format!("MLX compiled prefill failed: {msg}"))
+                        .unwrap_or_else(|_| CString::new("MLX compiled prefill failed").unwrap());
                     return (api.CreateStatus.unwrap())(ort::OrtErrorCode_ORT_EP_FAIL, c.as_ptr());
                 }
             }

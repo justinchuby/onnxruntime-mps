@@ -89,6 +89,31 @@ pub fn general_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
     !nodes.iter().any(|n| is_general_compile_unsafe(&n.op_type))
 }
 
+/// Decide whether the compiled-PREFILL fast path (Phase 2) is allowed for this plan. Prefill is the
+/// same decoder subgraph as decode but at query length S>1, so it needs a `GroupQueryAttention` node
+/// (the RoPE/KV machinery build declines otherwise) and no control-flow.
+///
+/// OPT-IN by default (`MLX_EP_PREFILL_COMPILE=1` to enable). The compiled shared-buffer path runs
+/// SDPA over the full KV capacity with a causal mask, whereas the eager prefill attends only the
+/// valid prefix `[0, S)`. For decode (S=1, launch-bound) kernel fusion dominates and wins; for
+/// prefill (S large, compute-bound) the full-cap attention outweighs the fusion saving and is a
+/// measured ~15-20% TTFT regression. Correct (byte-identical to eager) but not yet a win, so it
+/// stays behind an opt-in flag to preserve the eager-fallback discipline until the attention is
+/// narrowed to the valid prefix. Also honours the global compile kill-switch. The build itself
+/// falls back to eager for any non-decoder / partial-rotary shape.
+pub fn prefill_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
+    if !compile_enabled(has_control_flow) {
+        return false;
+    }
+    if !std::env::var_os("MLX_EP_PREFILL_COMPILE")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    nodes.iter().any(|n| n.op_type == "GroupQueryAttention")
+}
+
 /// Query sequence length S = trailing dim of the `input_ids` dynamic ctx input (decode => 1, prefill
 /// => prompt length). Scans the plan nodes directly so it works before the compiled closure's
 /// `dyn_inputs` list is built. Returns `None` if the input is not found / has no shape.
@@ -240,10 +265,16 @@ pub fn try_compiled(
     if !slot.get(unsafe { &*plan_ptr }).enabled {
         return Ok(false);
     }
-    // One-time discovery + compile.
+    // One-time discovery + compile. `build_closure` returns `false` for a TRANSIENT decline (the
+    // constant cos/sin cache is not resident yet — it is only populated during the first eager
+    // translation, which for prefill is the very first Compute call); in that case we leave
+    // `attempted` unset so a later call retries once the cache is warm. Every other outcome (compiled,
+    // or a permanent ineligibility / compile failure) is terminal and marks `attempted`.
     if !slot.get(unsafe { &*plan_ptr }).attempted {
-        slot.get_mut(unsafe { &mut *plan_ptr }).attempted = true;
-        build_closure(plan_ptr, slot, api, kctx, stream);
+        let terminal = build_closure(plan_ptr, slot, api, kctx, stream);
+        if terminal {
+            slot.get_mut(unsafe { &mut *plan_ptr }).attempted = true;
+        }
     }
     if !slot.get(unsafe { &*plan_ptr }).valid {
         return Ok(false);
@@ -422,13 +453,17 @@ pub fn try_compiled(
 /// order); for `rope_as_data` slots it also discovers `synth_ropes`, the RoPE-start source, and the
 /// shared-KV contract. Compiles the closure (shapeless iff `shape_mode == Shapeless`). Leaves
 /// `valid = false` (=> caller falls back to eager) if the plan is not eligible or the compile fails.
+///
+/// Returns whether the outcome is TERMINAL: `true` after a successful compile or a permanent
+/// ineligibility, `false` for a transient decline (the constant cos/sin cache is not resident yet)
+/// so the caller retries on a later call once the constants have been warmed by an eager translation.
 fn build_closure(
     plan_ptr: *mut Plan,
     slot: Slot,
     api: *const ort::OrtApi,
     kctx: *mut ort::OrtKernelContext,
     stream: mlxsys::mlx_stream,
-) {
+) -> bool {
     let cfg = slot.get(unsafe { &*plan_ptr }).config;
 
     let mut dyn_inputs: Vec<DynInput> = Vec::new();
@@ -490,10 +525,10 @@ fn build_closure(
     // Need at least one dynamic input (else the graph is fully constant — cheap to leave eager) and
     // at least one boundary output. `rope_as_data` slots additionally need the decoder RoPE shape.
     if dyn_inputs.is_empty() || ext_outputs.is_empty() {
-        return;
+        return true;
     }
     if cfg.rope_as_data && (rope_past < 0 || synth_ropes.is_empty()) {
-        return; // not the expected decoder shape; stay on the eager path
+        return true; // not the expected decoder shape; stay on the eager path
     }
 
     let mut shared_kv = false;
@@ -506,22 +541,25 @@ fn build_closure(
             Ok((_d, shape, _t)) => shape.last().copied().unwrap_or(0) as i32,
             Err(_) => 0,
         };
-        let half = {
+        // The cos/sin cache is a constant only loaded into `plan.cache` during an eager translation.
+        // On the very first Compute call (prefill) it is not resident yet — a TRANSIENT condition, so
+        // return non-terminal and retry once the constants are warm (the apply prologue needs them
+        // too). A resident cache with the wrong width is a PERMANENT decline (partial-rotary head).
+        let (half, cache_resident) = {
             let plan = unsafe { &*plan_ptr };
             match plan.cache.get(&synth_ropes[0].cache_name) {
                 Some(a) => {
                     let sh = a.shape();
-                    if sh.len() >= 2 {
-                        sh[1] as i32
-                    } else {
-                        0
-                    }
+                    (if sh.len() >= 2 { sh[1] as i32 } else { 0 }, true)
                 }
-                None => 0, // cos/sin cache not resident yet (prefill should have populated it)
+                None => (0, false),
             }
         };
+        if !cache_resident {
+            return false; // transient — constants not warmed yet
+        }
         if hd == 0 || half == 0 || 2 * half != hd {
-            return; // partial-rotary head not supported by the compiled path
+            return true; // partial-rotary head not supported by the compiled path
         }
     }
     if cfg.kv_alias {
@@ -570,6 +608,7 @@ fn build_closure(
         }
         Err(_) => { /* stay eager */ }
     }
+    true
 }
 
 /// `mlx_closure` trace thunk (payload = [`TracePayload`]): seed each dynamic ctx input (+ pre-sliced

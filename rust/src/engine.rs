@@ -201,6 +201,8 @@ pub struct TracePayload {
 pub enum Slot {
     /// Decode (`plan.compiled`): shapeless, all decode features.
     Decode,
+    /// Prefill (`plan.prefill`): shape-keyed, all decode features (Phase 2).
+    Prefill,
     /// General static-shape subgraph (`plan.general`): shape-keyed, no attention.
     General,
 }
@@ -210,6 +212,7 @@ impl Slot {
     pub fn get(self, plan: &Plan) -> &CompiledSubgraph {
         match self {
             Slot::Decode => &plan.compiled,
+            Slot::Prefill => &plan.prefill,
             Slot::General => &plan.general,
         }
     }
@@ -217,6 +220,7 @@ impl Slot {
     pub fn get_mut(self, plan: &mut Plan) -> &mut CompiledSubgraph {
         match self {
             Slot::Decode => &mut plan.compiled,
+            Slot::Prefill => &mut plan.prefill,
             Slot::General => &mut plan.general,
         }
     }
@@ -282,6 +286,21 @@ impl CompiledConfig {
             rope_as_data: false,
             delta_copyout: false,
             contiguous_outputs: true,
+        }
+    }
+    /// Prefill (Phase 2): the SAME decoder subgraph as decode with EVERY decode specialisation
+    /// (`kv_alias` / `rope_as_data` / `delta_copyout`), but a variable query length S>1. The causal
+    /// mask's query-position `arange(0, S)` extent and the KV write width are read as Rust ints during
+    /// the trace, so `S` bakes into the graph as a constant — a single shapeless closure traced at one
+    /// S would miscompute at another. Shape-keyed compilation retraces per distinct S (re-baking it
+    /// correctly) while replaying the fused closure for repeated prompt lengths.
+    pub const fn prefill() -> Self {
+        CompiledConfig {
+            shape_mode: ShapeMode::ShapeKeyed,
+            kv_alias: true,
+            rope_as_data: true,
+            delta_copyout: true,
+            contiguous_outputs: false,
         }
     }
 }
@@ -357,6 +376,8 @@ pub struct Plan {
     pub cache: HashMap<String, Array>,
     /// Compiled-decode fast-path state (shapeless + decode features; see [`CompiledConfig::decode`]).
     pub compiled: CompiledSubgraph,
+    /// Compiled-prefill fast-path state (shape-keyed + decode features; see [`CompiledConfig::prefill`]).
+    pub prefill: CompiledSubgraph,
     /// General static-shape compiled fast-path state (see [`CompiledConfig::general`]).
     pub general: CompiledSubgraph,
 }
@@ -367,6 +388,7 @@ impl Plan {
             nodes,
             cache: HashMap::new(),
             compiled: CompiledSubgraph::new(CompiledConfig::decode()),
+            prefill: CompiledSubgraph::new(CompiledConfig::prefill()),
             general: CompiledSubgraph::new(CompiledConfig::general()),
         }
     }

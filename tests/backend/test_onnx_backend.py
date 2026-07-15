@@ -167,6 +167,30 @@ _EXCLUDE = [
     # state is an optional(seq(tensor)) fed as a None optional — ORT's CPU control flow
     # cannot materialise the missing optional-sequence state.
     r".*test_loop16_seq_none_cpu$",
+    # --- residual triage (ORT/ONNX-inherent: all fail on the pure CPU EP too) ---
+    # Training ops (Adagrad/Adam/Momentum/Gradient): ORT can't even load the model (training
+    # domain ops are not part of the inference build).
+    r"^test_adagrad_", r"^test_adam_", r"^test_momentum_", r"^test_nesterov_momentum_",
+    r"^test_gradient_of_",
+    # TrainingDropout with a non-zero ratio: non-deterministic RNG mask can't match the fixed
+    # reference (fails on ORT CPU too). The zero-ratio variants are deterministic identity and pass.
+    r"^test_training_dropout(_default)?(_mask)?_cpu$",
+    # BitShift(uint16) / Max|Min(int16|uint16) / TopK(uint64): ORT 1.27 CPU has no kernel for
+    # these element types (NOT_IMPLEMENTED).
+    r"^test_bitshift_(left|right)_uint16_cpu$",
+    r"^test_(max|min)_(u?int16)_cpu$",
+    r"^test_top_k_uint64_cpu$",
+    # ImageDecoder(20): ORT 1.27 CPU has no kernel (NOT_IMPLEMENTED); needs image codec libs.
+    r"^test_image_decoder_",
+    # Range: the reference models are stamped opset 27 (ai.onnx official support in ORT 1.27 is
+    # opset 26), so ORT refuses to load them regardless of element type.
+    r"^test_range_.*_type_.*_delta(_expanded)?_cpu$",
+    # Legacy opset-6 Add with Caffe2 broadcast attrs (pytorch-converted): ORT removed the
+    # opset-6 CPU Add kernel (only opset-7+ numpy-broadcast is guaranteed).
+    r"^test_operator_add_broadcast_cpu$",
+    r"^test_operator_add_size1(_right|_singleton)?_broadcast_cpu$",
+    r"^test_operator_addconstant_cpu$",
+    r"^test_operator_non_float_params_cpu$",
 ]
 for _pat in _EXCLUDE:
     try:

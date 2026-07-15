@@ -143,7 +143,7 @@ fn run_direction(
     let mut rb: Option<mlx::mlx_array> = None;
     let has_bias = din.has_bias;
     if has_bias {
-        let bd = dir_slab(ctx, din.b.unwrap(), d)?; // [2*G*H]
+        let bd = dir_slab(ctx, din.b.ok_or_else(|| "RNN: bias flagged but missing".to_string())?, d)?; // [2*G*H]
         let wb = vec1d(ctx, bd, 0, gh)?;
         rb = Some(vec1d(ctx, bd, gh, 2 * gh)?);
         xproj = ctx.add(xproj, wb)?;
@@ -151,13 +151,13 @@ fn run_direction(
 
     // Initial states.
     let mut h_prev = if din.has_init_h {
-        dir_slab(ctx, din.init_h.unwrap(), d)?
+        dir_slab(ctx, din.init_h.ok_or_else(|| "RNN: initial_h flagged but missing".to_string())?, d)?
     } else {
         ctx.zeros(&[b_sz, h], dt)?
     };
     let mut c_prev = if op == "LSTM" {
         if din.has_init_c {
-            Some(dir_slab(ctx, din.init_c.unwrap(), d)?)
+            Some(dir_slab(ctx, din.init_c.ok_or_else(|| "LSTM: initial_c flagged but missing".to_string())?, d)?)
         } else {
             Some(ctx.zeros(&[b_sz, h], dt)?)
         }
@@ -168,7 +168,7 @@ fn run_direction(
     // Peepholes (LSTM).
     let (mut pi, mut po, mut pf) = (None, None, None);
     if op == "LSTM" && din.has_peephole {
-        let pd = dir_slab(ctx, din.p.unwrap(), d)?; // [3*H]
+        let pd = dir_slab(ctx, din.p.ok_or_else(|| "LSTM: peephole flagged but missing".to_string())?, d)?; // [3*H]
         pi = Some(vec1d(ctx, pd, 0, h)?);
         po = Some(vec1d(ctx, pd, h, 2 * h)?);
         pf = Some(vec1d(ctx, pd, 2 * h, 3 * h)?);
@@ -180,7 +180,7 @@ fn run_direction(
         let xg = step_slab(ctx, xproj, t, b_sz, gh)?; // [B, G*H] (already carries Wb)
         let mut hf = ctx.matmul(h_prev, rdt)?; // [B, G*H]
         if has_bias {
-            hf = ctx.add(hf, rb.unwrap())?;
+            hf = ctx.add(hf, rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?)?;
         }
 
         if op == "RNN" {
@@ -214,7 +214,7 @@ fn run_direction(
                 let rh_state = ctx.mul(rt, h_prev)?;
                 let mut hh = ctx.matmul(rh_state, rht)?;
                 if has_bias {
-                    let rbh = vec1d(ctx, rb.unwrap(), 2 * h, 3 * h)?;
+                    let rbh = vec1d(ctx, rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?, 2 * h, 3 * h)?;
                     hh = ctx.add(hh, rbh)?;
                 }
                 ctx.add(xh, hh)?
@@ -243,10 +243,10 @@ fn run_direction(
             let mut ipre = ctx.add(xi, hi)?;
             let mut fpre = ctx.add(xf, hfg)?;
             if din.has_peephole {
-                let cp = c_prev.unwrap();
-                let pic = ctx.mul(pi.unwrap(), cp)?;
+                let cp = c_prev.ok_or_else(|| "LSTM: cell state missing".to_string())?;
+                let pic = ctx.mul(pi.ok_or_else(|| "LSTM: peephole pi missing".to_string())?, cp)?;
                 ipre = ctx.add(ipre, pic)?;
-                let pfc = ctx.mul(pf.unwrap(), cp)?;
+                let pfc = ctx.mul(pf.ok_or_else(|| "LSTM: peephole pf missing".to_string())?, cp)?;
                 fpre = ctx.add(fpre, pfc)?;
             }
             let ipc = clip_(ctx, ipre, clip, dt)?;
@@ -262,14 +262,14 @@ fn run_direction(
             let csum = ctx.add(xc, hc)?;
             let cc = clip_(ctx, csum, clip, dt)?;
             let ct = tanh_(ctx, cc)?;
-            let cp = c_prev.unwrap();
+            let cp = c_prev.ok_or_else(|| "LSTM: cell state missing".to_string())?;
             let fc = ctx.mul(ft, cp)?;
             let ic = ctx.mul(it, ct)?;
             let c_new = ctx.add(fc, ic)?;
 
             let mut opre = ctx.add(xo, ho)?;
             if din.has_peephole {
-                let poc = ctx.mul(po.unwrap(), c_new)?;
+                let poc = ctx.mul(po.ok_or_else(|| "LSTM: peephole po missing".to_string())?, c_new)?;
                 opre = ctx.add(opre, poc)?;
             }
             let opc = clip_(ctx, opre, clip, dt)?;
@@ -371,7 +371,7 @@ fn recurrent_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
                 Some(prev) => ctx.concat2(prev, ydir, 1)?,
             });
         }
-        ctx.bind(&n.outputs[0], y.unwrap());
+        ctx.bind(&n.outputs[0], y.ok_or_else(|| "RNN: no directions produced Y".to_string())?);
     }
 
     // Y_h : [num_dir, B, H].
@@ -384,20 +384,20 @@ fn recurrent_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
                 Some(prev) => ctx.concat2(prev, hd, 0)?,
             });
         }
-        ctx.bind(&n.outputs[1], yh.unwrap());
+        ctx.bind(&n.outputs[1], yh.ok_or_else(|| "RNN: no directions produced Y_h".to_string())?);
     }
 
     // Y_c : [num_dir, B, H] (LSTM only).
     if op == "LSTM" && n.outputs.len() >= 3 && !n.outputs[2].name.is_empty() {
         let mut yc: Option<mlx::mlx_array> = None;
         for d in 0..num_dir {
-            let cd = ctx.expand_dims(results[d].final_c.unwrap(), 0)?; // [1,B,H]
+            let cd = ctx.expand_dims(results[d].final_c.ok_or_else(|| "LSTM: final cell state missing".to_string())?, 0)?; // [1,B,H]
             yc = Some(match yc {
                 None => cd,
                 Some(prev) => ctx.concat2(prev, cd, 0)?,
             });
         }
-        ctx.bind(&n.outputs[2], yc.unwrap());
+        ctx.bind(&n.outputs[2], yc.ok_or_else(|| "LSTM: no directions produced Y_c".to_string())?);
     }
     Ok(())
 }

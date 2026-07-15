@@ -6,8 +6,9 @@
 //! path expect NHWC (channels-last). Every handler therefore transposes the input to channels-last
 //! (`to_channels_last`), runs the MLX op, and transposes the result back (`from_channels_last`);
 //! conv weights are repacked from ONNX `[O, I/g, kH, kW]` to MLX `[O, kH, kW, I/g]`. Only the exact
-//! attribute/shape forms the C++ claim accepts are claimed (NOTSET auto_pad, symmetric pads, unit
-//! dilations where MLX cannot express them, no ceil_mode); everything else is left to ORT CPU.
+//! attribute/shape forms the C++ claim accepts are claimed (NOTSET auto_pad, per-dim asymmetric pads
+//! via `mlx_conv_general`, unit dilations where MLX cannot express them, no ceil_mode); everything
+//! else is left to ORT CPU.
 
 use std::os::raw::c_char;
 
@@ -77,15 +78,48 @@ fn conv_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     let w0 = ctx.resolve(&n.inputs[1])?;
     let weight = conv_weight_to_mlx(ctx, w0, spatial_rank)?;
 
-    let mut out = if spatial_rank == 1 {
+    // Symmetric pads (`pads[i] == pads[i + spatial_rank]`) use the fast symmetric conv1d/conv2d
+    // primitives. ONNX also permits per-dim asymmetric pads (begin != end); MLX cannot express those
+    // through conv1d/conv2d, so route them through `mlx_conv_general`, which takes separate
+    // `padding_lo`/`padding_hi` vectors.
+    let symmetric = (0..spatial_rank as usize).all(|i| pads[i] == pads[i + spatial_rank as usize]);
+
+    let mut out = if symmetric && spatial_rank == 1 {
         let (st, pa, di) = (strides[0] as i32, pads[0] as i32, dilations[0] as i32);
         ctx.emit(|res, s| unsafe { mlx::mlx_conv1d(res, x, weight, st, pa, di, group, s) })?
-    } else {
+    } else if symmetric && spatial_rank == 2 {
         let (s0, s1) = (strides[0] as i32, strides[1] as i32);
         let (p0, p1) = (pads[0] as i32, pads[1] as i32);
         let (d0, d1) = (dilations[0] as i32, dilations[1] as i32);
         ctx.emit(|res, s| unsafe {
             mlx::mlx_conv2d(res, x, weight, s0, s1, p0, p1, d0, d1, group, s)
+        })?
+    } else {
+        let sr = spatial_rank as usize;
+        let stride_i: Vec<i32> = strides.iter().map(|&v| v as i32).collect();
+        let pad_lo: Vec<i32> = (0..sr).map(|i| pads[i] as i32).collect();
+        let pad_hi: Vec<i32> = (0..sr).map(|i| pads[i + sr] as i32).collect();
+        let dil_i: Vec<i32> = dilations.iter().map(|&v| v as i32).collect();
+        let input_dil: Vec<i32> = vec![1; sr];
+        ctx.emit(|res, s| unsafe {
+            mlx::mlx_conv_general(
+                res,
+                x,
+                weight,
+                stride_i.as_ptr(),
+                stride_i.len(),
+                pad_lo.as_ptr(),
+                pad_lo.len(),
+                pad_hi.as_ptr(),
+                pad_hi.len(),
+                dil_i.as_ptr(),
+                dil_i.len(),
+                input_dil.as_ptr(),
+                input_dil.len(),
+                group,
+                false,
+                s,
+            )
         })?
     };
 
@@ -414,11 +448,9 @@ fn conv_claim(node: &NodeView) -> bool {
         Some(v) => v,
         None => return false,
     };
-    for i in 0..spatial_rank {
-        if pads[i] != pads[i + spatial_rank] {
-            return false;
-        }
-    }
+    // Asymmetric pads (`pads[i] != pads[i + spatial_rank]`) are supported: `conv_op` routes them
+    // through `mlx_conv_general`, which takes separate `padding_lo`/`padding_hi` vectors. Only the
+    // non-negativity checked in `read_pads` is required.
     let (kernel_present, kernel_shape) = node.ints_attr("kernel_shape");
     if kernel_present {
         if kernel_shape.len() != spatial_rank {

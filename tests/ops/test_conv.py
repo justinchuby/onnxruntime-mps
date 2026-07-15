@@ -102,6 +102,26 @@ CONV_CASES = [
         True,
         id="conv2d-grouped-dilated-bias",
     ),
+    pytest.param(
+        (1, 3, 8, 7),
+        (5, 3, 3, 3),
+        (2, 2),
+        (1, 0, 0, 1),
+        (1, 1),
+        1,
+        True,
+        id="conv2d-asymmetric-pads",
+    ),
+    pytest.param(
+        (1, 2, 9),
+        (4, 2, 3),
+        (1,),
+        (2, 0),
+        (1,),
+        1,
+        False,
+        id="conv1d-asymmetric-pads",
+    ),
 ]
 
 

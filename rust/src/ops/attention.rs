@@ -112,6 +112,34 @@ fn sdpa_dispatch(
     sdpa(ctx, q, k, v, scale, b"\0", empty_array())
 }
 
+/// Build an ONNX-semantics causal additive mask `[q_len, k_len]` for SDPA.
+///
+/// ONNX `Attention` `is_causal` masks query `i` against key `j` iff `j > past_seq + i`
+/// (`onnx/reference/ops/op_attention.py::_apply_causal`), i.e. an upper-left alignment where the
+/// first `past_seq` keys are always visible and the causal triangle starts at the new-key region.
+/// MLX's built-in `"causal"` mode instead uses a lower-right alignment (`j <= i + (k_len - q_len)`),
+/// which only matches ONNX when `past_seq == k_len - q_len`. For the non-square no-past case
+/// (`k_len > q_len`, `past_seq == 0`) the two disagree, so we build the additive mask explicitly.
+fn causal_mask_topleft(
+    ctx: &mut TranslationContext,
+    q_len: i32,
+    k_len: i32,
+    past_seq: i32,
+    dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
+    let i32t = mlx::mlx_dtype__MLX_INT32;
+    let key_pos = ctx.arange(0.0, k_len as f64, 1.0, i32t)?; // [k_len]
+    let key_pos = ctx.reshape(key_pos, &[1, k_len])?; // [1,k_len]
+    let q_pos = ctx.arange(past_seq as f64, (past_seq + q_len) as f64, 1.0, i32t)?; // [q_len]
+    let q_pos = ctx.reshape(q_pos, &[q_len, 1])?; // [q_len,1]
+    let allow = ctx.less_equal(key_pos, q_pos)?; // [q_len,k_len] bool
+    let zero = ctx.scalar_f32(0.0);
+    let zero = ctx.astype(zero, dt)?;
+    let neg = ctx.scalar_f32(f32::NEG_INFINITY);
+    let neg = ctx.astype(neg, dt)?;
+    ctx.where_(allow, zero, neg)
+}
+
 /// [B,S,H*hd] -> [B,H,S,hd] (head-major split then transpose).
 fn split_heads(ctx: &mut TranslationContext, x: mlx::mlx_array, b: i32, s: i32, h: i32, hd: i32) -> Result<mlx::mlx_array, MlxError> {
     let r = ctx.reshape(x, &[b, s, h, hd])?;
@@ -554,7 +582,18 @@ fn attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
         None
     };
 
-    let attn = sdpa_dispatch(ctx, qh4, present_k, present_v, scale, causal, mask, dt)?;
+    let attn = if causal {
+        // ONNX `is_causal` uses upper-left alignment: the past keys (present K length minus the new
+        // K length) are always visible and the causal triangle covers the new-key region. MLX's
+        // built-in "causal" mode is lower-right aligned, so build the ONNX mask explicitly instead.
+        let k_len = ctx.shape_of(present_k)[2];
+        let cur_kv = ctx.shape_of(kh4)[2];
+        let past_seq = k_len - cur_kv;
+        let cmask = causal_mask_topleft(ctx, s, k_len, past_seq, dt)?;
+        sdpa(ctx, qh4, present_k, present_v, scale, b"array\0", cmask)?
+    } else {
+        sdpa_dispatch(ctx, qh4, present_k, present_v, scale, false, mask, dt)?
+    };
 
     if is3d {
         // [B,qh,S,hd_v] -> [B,S,qh*hd_v].

@@ -72,7 +72,18 @@ class MlxBackendRep(BackendRep):
         self._outputs = outputs
 
     def run(self, inputs, **kwargs):  # noqa: ANN001
-        feeds = {name: np.asarray(val) for name, val in zip(self._inputs, inputs)}
+        # Sequence/optional inputs arrive as Python lists of arrays; ``np.asarray`` would
+        # collapse those into a single dense tensor and ORT would reject the feed
+        # ("expected sequence, received tensor"). Pass list-valued feeds through as a list
+        # of arrays so ORT builds a proper sequence OrtValue; wrap plain tensor inputs.
+        def _feed(val):
+            if val is None:
+                return None
+            if isinstance(val, (list, tuple)):
+                return [np.asarray(v) for v in val]
+            return np.asarray(val)
+
+        feeds = {name: _feed(val) for name, val in zip(self._inputs, inputs)}
         return self._sess.run(self._outputs, feeds)
 
 
@@ -152,6 +163,10 @@ _EXCLUDE = [
     # differ from numpy, so the MLX EP cannot faithfully serve them either.
     # Modern `test_prelu_*` (opset-16, numpy broadcast) still run and pass.
     r"test_PReLU_\dd(_multiparam)?_cpu$",
+    # ORT-inherent: fails on the pure CPU EP too (not an MLX bug). A Loop whose carried
+    # state is an optional(seq(tensor)) fed as a None optional — ORT's CPU control flow
+    # cannot materialise the missing optional-sequence state.
+    r".*test_loop16_seq_none_cpu$",
 ]
 for _pat in _EXCLUDE:
     try:

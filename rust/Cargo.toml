@@ -1,6 +1,6 @@
 [package]
 name = "onnxruntime-mlx-ep"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "MLX-native ONNX Runtime execution provider (plugin EP) for Apple Silicon — binds mlx-c directly, no mlx-rs."
 license = "MIT"

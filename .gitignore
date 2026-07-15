@@ -77,3 +77,4 @@ venv/
 env/
 .python-version
 scratch/
+.DS_Store

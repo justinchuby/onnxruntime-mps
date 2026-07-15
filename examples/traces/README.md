@@ -18,6 +18,7 @@ into onnx-genai's own timeline under the same process.
 | `matmulnbits-fast-vs-composed.json` | MatMulNBits block-16 vs block-32 | Both a `op.fast` (`mlx_quantized_matmul`, block 32) **and** `op.composed` path (block 16 → dequant+dense), with a `⚠ composed-path: MatMulNBits (...)` instant marker + `mlx.composed_path_count` counter |
 | `ep-events-conv.json` | Conv op suite (the general **compiled** path) | `mlx.compute[general]` instant events (`ep.path`); the `cache` arg is `MISS` on each fresh session; `mlx.compile` + `mlx.eval` + `mlx.copy` **timing-attribution** spans (`ep.phase`); `mlx.getcapability` claim events (`ep.claim`) with `claimed`/`fused_subgraphs`; `mlx.mem_wrap_bytes` / `mlx.copyout_bytes` **memory** counters; a `mlx.session_summary` digest instant |
 | `ep-events-attention.json` | GQA / attention op suite (the **eager** path) | `mlx.compute[eager]` events (`ep.path`); `mlx.translate` + `mlx.eval` timing spans; the claim, memory and summary events as above |
+| `perch-audio-encoder.json` | A real model — Perch v2 bird-vocalization audio encoder (725 nodes, 5s@32kHz), the general **compiled** path (MLX ~5× faster than CPU) | `ep.claim` shows **724/725 nodes claimed** into 2 fused subgraphs (1 `Max` → CPU with a `fallback_Max` reason); `ep.path` `mlx.compute[general]` with `cache` HIT/MISS/RETRACE; the `mlx.session_summary` digest (claim rate, per-path breakdown, zero-copy/delta memory, timing attribution) — the at-a-glance view on a substantial graph |
 
 ## The observability views (new)
 

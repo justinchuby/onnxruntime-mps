@@ -175,6 +175,37 @@ fn causal_mask_topleft(
     ctx.where_(allow, zero, neg)
 }
 
+/// GQA eager SDPA over the attended keys `[0, k_len)`, with the queries at positions
+/// `[valid_past, valid_past+S)`. Without an `attention_bias` this is plain causal SDPA (bit-for-bit
+/// the legacy behavior). With the 11-input Gemma3n `attention_bias` (input 10, `[B,1,S,total]`
+/// additive mask encoding the causal + sliding-window mask), we fold it into an array mask:
+/// `mask = causal_topleft[q_len,k_len] + attention_bias[..,:k_len]`. Adding the causal triangle is
+/// idempotent where the bias already masks (−inf + finite = −inf) and supplies causality where it
+/// doesn't; the sliding window is carried entirely by the bias.
+#[allow(clippy::too_many_arguments)]
+fn gqa_eager_sdpa(
+    ctx: &mut TranslationContext,
+    n: &NodeDesc,
+    qh: mlx::mlx_array,
+    ak: mlx::mlx_array,
+    av: mlx::mlx_array,
+    scale: f32,
+    q_len: i32,
+    valid_past: i32,
+    k_len: i32,
+) -> Result<mlx::mlx_array, MlxError> {
+    if present(n, 10) {
+        let dt = ctx.dtype_of(qh);
+        let bias = ctx.resolve(&n.inputs[10])?; // [B,1,S,total]
+        let bs = ctx.shape_of(bias);
+        let bias = slice(ctx, bias, &[0, 0, 0, 0], &[bs[0], bs[1], q_len, k_len])?;
+        let causal = causal_mask_topleft(ctx, q_len, k_len, valid_past, dt)?; // [q_len,k_len]
+        let mask = add(ctx, causal, bias)?; // -> [B,1,S,k_len]
+        return sdpa(ctx, qh, ak, av, scale, b"array\0", mask);
+    }
+    sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())
+}
+
 /// [B,S,H*hd] -> [B,H,S,hd] (head-major split then transpose).
 fn split_heads(
     ctx: &mut TranslationContext,
@@ -577,12 +608,12 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
             let vp1 = valid_past + s;
             let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
             let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
-            let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
+            let attn = gqa_eager_sdpa(ctx, n, qh, ak, av, scale, s, valid_past, vp1)?;
             (pk, pv, attn)
         } else {
             let pk = concat2(ctx, past_k, kh, 2)?;
             let pv = concat2(ctx, past_v, vh, 2)?;
-            let attn = sdpa(ctx, qh, pk, pv, scale, b"causal\0", empty_array())?;
+            let attn = gqa_eager_sdpa(ctx, n, qh, pk, pv, scale, s, valid_past, valid_past + s)?;
             (pk, pv, attn)
         };
 
@@ -938,8 +969,12 @@ fn is_int32(t: ort::ONNXTensorElementDataType) -> bool {
     t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
 }
 
-/// GroupQueryAttention (com.microsoft): 9-input separate-QKV decode/prefill layout. All floating
-/// inputs/outputs one dtype; seqlens_k / total_sequence_length are int32.
+/// GroupQueryAttention (com.microsoft): separate-QKV decode/prefill layout. Two accepted layouts:
+///   * 9-input (q, k, v, past_k, past_v, seqlens_k, total_seq, cos, sin) — in-op RoPE decoder.
+///   * 11-input (…, seqlens_k, total_seq, cos, sin, position_ids, attention_bias) — the Gemma3n
+///     variant with `do_rotary=0` (cos/sin absent, rotary applied by external RotaryEmbedding nodes)
+///     and an additive `attention_bias` mask (input 10). `position_ids` (input 9) is ignored.
+/// All floating inputs/outputs share one dtype; seqlens_k / total_sequence_length are int32.
 fn group_query_attention_claim(node: &NodeView) -> ClaimResult {
     require!(node.num_outputs() > 0, "requires at least 1 output");
     let out_type = match node.output_info(0) {
@@ -950,12 +985,31 @@ fn group_query_attention_claim(node: &NodeView) -> ClaimResult {
         ),
         None => deny!("output lacks tensor type/shape info"),
     };
+    let ninputs = node.num_inputs();
     require!(
-        node.num_inputs() == 9,
-        "expects 9 inputs (q, k, v, past_k, past_v, seqlens_k, total_seq, cos, sin), got {}",
-        node.num_inputs()
+        ninputs == 9 || ninputs == 11,
+        "expects 9 inputs (q, k, v, past_k, past_v, seqlens_k, total_seq, cos, sin) or 11 inputs \
+         (…, position_ids, attention_bias), got {}",
+        ninputs
     );
-    for &idx in &[0usize, 1, 2, 3, 4, 7, 8] {
+    // The 11-input Gemma3n variant only maps to MLX when rotary is external (do_rotary=0): cos/sin at
+    // 7,8 are absent, so we must not require their dtype and must not resolve them in the handler.
+    let has_bias = ninputs == 11;
+    let do_rotary = node.int_attr("do_rotary", 1) != 0;
+    if has_bias {
+        require!(
+            !do_rotary,
+            "11-input GroupQueryAttention is only supported with do_rotary=0 (external rotary); \
+             got do_rotary=1"
+        );
+    }
+    // Float inputs that must match the output dtype. cos/sin (7,8) only exist in the 9-input form.
+    let float_idx: &[usize] = if has_bias {
+        &[0usize, 1, 2, 3, 4]
+    } else {
+        &[0usize, 1, 2, 3, 4, 7, 8]
+    };
+    for &idx in float_idx {
         let dtype = match dtype_of(node, idx) {
             Some(dtype) => dtype,
             None => deny!("input {} lacks tensor type/shape info", idx),
@@ -991,6 +1045,30 @@ fn group_query_attention_claim(node: &NodeView) -> ClaimResult {
             "input {} must have int32 dtype, got {}",
             idx,
             crate::registry::ort_dtype_name(dtype)
+        );
+    }
+    // 11-input variant: attention_bias (input 10) is an additive [B,1,S,total] mask folded into the
+    // SDPA scores. Require it present, sharing the output float dtype, and rank 4. position_ids
+    // (input 9) is ignored when do_rotary=0, so it may be present or absent.
+    if has_bias {
+        require!(
+            node.input_present(10),
+            "11-input GroupQueryAttention requires attention_bias (input 10)"
+        );
+        let bias = match node.input_info(10) {
+            Some(info) => info,
+            None => deny!("attention_bias (input 10) lacks tensor type/shape info"),
+        };
+        require!(
+            bias.dtype == out_type,
+            "attention_bias (input 10) must have output dtype {}, got {}",
+            crate::registry::ort_dtype_name(out_type),
+            crate::registry::ort_dtype_name(bias.dtype)
+        );
+        require!(
+            bias.shape.len() == 4,
+            "attention_bias (input 10) must have rank 4, got rank {}",
+            bias.shape.len()
         );
     }
     let nh = node.int_attr("num_heads", 0);

@@ -361,3 +361,84 @@ def test_bitshift(direction: str, dtype: DT, np_dtype) -> None:
         "b": np.array([1, 3, 1, 2], dtype=np_dtype),
     }
     check(model, feeds, rtol=0, atol=0)
+
+
+# --- Cast: integer<->float and integer<->integer conversions -------------------------------------
+# ORT Cast to an integer type truncates toward zero; MLX `mlx_astype` does the same. int<->int and
+# int->float conversions are exact for in-range values. NaN / out-of-range floats are undefined in
+# ONNX and deliberately excluded from these inputs.
+_INT_FLOAT_CAST_CASES = [
+    # int -> float
+    (DT.INT32, DT.FLOAT, np.array([[-5, -1, 0], [1, 7, 123456]], dtype=np.int32)),
+    (DT.INT32, DT.FLOAT16, np.array([[-5, -1, 0], [1, 7, 2048]], dtype=np.int32)),
+    (DT.INT64, DT.FLOAT, np.array([[-5, -1, 0], [1, 7, 123456]], dtype=np.int64)),
+    (DT.INT64, DT.FLOAT16, np.array([[-5, -1, 0], [1, 7, 2048]], dtype=np.int64)),
+    # float -> int (truncation toward zero, incl. negatives)
+    (DT.FLOAT, DT.INT32, np.array([[-2.9, -0.5, 0.0], [0.5, 2.9, 100.7]], dtype=np.float32)),
+    (DT.FLOAT, DT.INT64, np.array([[-2.9, -0.5, 0.0], [0.5, 2.9, 100.7]], dtype=np.float32)),
+    (DT.FLOAT16, DT.INT32, np.array([[-2.9, -0.5, 0.0], [0.5, 2.9, 100.5]], dtype=np.float16)),
+    (DT.FLOAT16, DT.INT64, np.array([[-2.9, -0.5, 0.0], [0.5, 2.9, 100.5]], dtype=np.float16)),
+    # int <-> int
+    (DT.INT32, DT.INT64, np.array([[-5, -1, 0], [1, 7, 2147483647]], dtype=np.int32)),
+    (DT.INT64, DT.INT32, np.array([[-5, -1, 0], [1, 7, 2147483647]], dtype=np.int64)),
+]
+
+
+@pytest.mark.parametrize(
+    "src,dst,x",
+    _INT_FLOAT_CAST_CASES,
+    ids=[f"{s.name}->{d.name}" for s, d, _ in _INT_FLOAT_CAST_CASES],
+)
+def test_cast_int_float(src: DT, dst: DT, x: np.ndarray) -> None:
+    model = m.make_model(
+        "Cast",
+        [m.tensor("x", src, list(x.shape))],
+        [m.tensor("out", dst, list(x.shape))],
+        attributes={"to": int(dst)},
+    )
+    check(model, {"x": x}, rtol=0, atol=0)
+
+
+# --- Add / Mul on int32 / int64 ------------------------------------------------------------------
+# Element-wise integer Add/Mul, including broadcasting, negatives, and two's-complement overflow
+# wraparound (MLX matches ORT CPU / numpy int semantics).
+_INT_BINARY_CASES = [
+    (DT.INT32, np.int32),
+    (DT.INT64, np.int64),
+]
+
+
+@pytest.mark.parametrize("op", ["Add", "Mul"])
+@pytest.mark.parametrize("dtype,np_dtype", _INT_BINARY_CASES, ids=["i32", "i64"])
+def test_binary_int(op: str, dtype: DT, np_dtype) -> None:
+    # (2,3) op (3,) — exercises trailing-suffix broadcasting with negative values.
+    model = m.make_model(
+        op,
+        [m.tensor("a", dtype, [2, 3]), m.tensor("b", dtype, [3])],
+        [m.tensor("out", dtype, [2, 3])],
+    )
+    feeds = {
+        "a": np.array([[1, -2, 3], [-4, 5, -6]], dtype=np_dtype),
+        "b": np.array([2, -4, 7], dtype=np_dtype),
+    }
+    check(model, feeds, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("op", ["Add", "Mul"])
+@pytest.mark.parametrize("dtype,np_dtype", _INT_BINARY_CASES, ids=["i32", "i64"])
+def test_binary_int_overflow(op: str, dtype: DT, np_dtype) -> None:
+    # Values chosen to overflow the dtype: MLX must wrap two's-complement exactly like ORT CPU.
+    info = np.iinfo(np_dtype)
+    if op == "Add":
+        a = np.array([info.max, info.max, info.min], dtype=np_dtype)
+        b = np.array([1, info.max, info.min], dtype=np_dtype)
+    else:  # Mul
+        a = np.array([info.max, info.min, info.max], dtype=np_dtype)
+        b = np.array([2, 2, info.max], dtype=np_dtype)
+    model = m.make_model(
+        op,
+        [m.tensor("a", dtype, [3]), m.tensor("b", dtype, [3])],
+        [m.tensor("out", dtype, [3])],
+    )
+    with np.errstate(over="ignore"):
+        check(model, {"a": a, "b": b}, rtol=0, atol=0)

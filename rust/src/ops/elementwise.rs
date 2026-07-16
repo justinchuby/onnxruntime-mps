@@ -4,7 +4,7 @@
 
 use crate::engine::{mlx_dtype_from_onnx, MlxError, NodeDesc, TranslationContext};
 use crate::registry::{
-    is_mlx_float, is_mlx_numeric, is_signed_integer, is_unsigned_integer,
+    is_int_index, is_mlx_float, is_mlx_numeric, is_signed_integer, is_unsigned_integer,
     scalar_or_suffix_broadcast, K_ANY_OPSET, NodeView, OpRegistration, OpRegistry,
 };
 use crate::sys::mlx;
@@ -191,8 +191,13 @@ fn bitshift_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErro
 
 // ---- claim predicates ---------------------------------------------------------------------------
 
-/// Binary same-dtype (float, or optionally signed integer) with scalar-or-suffix broadcast.
-fn binary_same_type_claim(node: &NodeView, allow_signed_int: bool) -> bool {
+/// Binary same-dtype with scalar-or-suffix broadcast. Floats (fp32/fp16/bf16) are always accepted;
+/// `int_ok` decides which integer dtypes are additionally admitted (MLX `mlx_add`/`mlx_multiply`/
+/// `mlx_subtract` carry these element-wise, matching ORT CPU including two's-complement wraparound).
+fn binary_same_type_claim(
+    node: &NodeView,
+    int_ok: fn(ort::ONNXTensorElementDataType) -> bool,
+) -> bool {
     if node.num_inputs() != 2 || node.num_outputs() != 1 {
         return false;
     }
@@ -206,20 +211,22 @@ fn binary_same_type_claim(node: &NodeView, allow_signed_int: bool) -> bool {
     if !scalar_or_suffix_broadcast(&a.shape, &b.shape) {
         return false;
     }
-    is_mlx_float(a.dtype) || (allow_signed_int && is_signed_integer(a.dtype))
+    is_mlx_float(a.dtype) || int_ok(a.dtype)
 }
 
+/// Add: fp32/fp16/bf16 or int32/int64 (index/shape/loop-counter arithmetic in detector subgraphs).
 fn add_claim(node: &NodeView) -> bool {
-    binary_same_type_claim(node, false)
+    binary_same_type_claim(node, is_int_index)
 }
 
+/// Mul: fp32/fp16/bf16 or int32/int64 (same integer index/shape arithmetic as Add).
 fn mul_claim(node: &NodeView) -> bool {
-    binary_same_type_claim(node, false)
+    binary_same_type_claim(node, is_int_index)
 }
 
 /// Sub: fp32/fp16/bf16 or signed-integer (the seqlens-prep chain uses int64).
 fn sub_claim(node: &NodeView) -> bool {
-    binary_same_type_claim(node, true)
+    binary_same_type_claim(node, is_signed_integer)
 }
 
 /// Single fp32/fp16/bf16 input, same dtype out.
@@ -254,7 +261,44 @@ fn softmax_claim(node: &NodeView) -> bool {
     rank > 0 && (axis == -1 || axis == rank - 1)
 }
 
-/// Cast: float<->float among fp32/fp16/bf16 (distinct pair) plus int64->int32.
+/// Cast conversions MLX's `mlx_astype` produces bit-identically to ORT CPU:
+///   * float<->float among fp32/fp16/bf16 (distinct pair);
+///   * int32<->int64 (exact within range);
+///   * int32/int64 -> fp32/fp16 (round-to-nearest, matching CPU static_cast/convert);
+///   * fp32/fp16 -> int32/int64 (truncation toward zero, matching ONNX Cast + CPU static_cast).
+/// float64/bool/uint are intentionally excluded (not part of the audited detector subgraphs and not
+/// all verified against CPU).
+fn cast_pair_claimable(
+    src: ort::ONNXTensorElementDataType,
+    dst: ort::ONNXTensorElementDataType,
+) -> bool {
+    if is_mlx_float(src) && is_mlx_float(dst) && src != dst {
+        return true;
+    }
+    // int32 <-> int64 (exact).
+    if is_int_index(src) && is_int_index(dst) && src != dst {
+        return true;
+    }
+    // int32/int64 -> fp32/fp16.
+    if is_int_index(src) && is_cast_float(dst) {
+        return true;
+    }
+    // fp32/fp16 -> int32/int64 (truncation toward zero).
+    if is_cast_float(src) && is_int_index(dst) {
+        return true;
+    }
+    false
+}
+
+/// fp32/fp16 — the float side of the claimable integer<->float casts (bf16 is not feedable/readable
+/// through the ORT Python binding and its CPU-match is covered separately via the float<->float path).
+fn is_cast_float(t: ort::ONNXTensorElementDataType) -> bool {
+    t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+        || t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16
+}
+
+/// Cast: the dtype-agnostic handler just calls `astype` to the output dtype, so the predicate is the
+/// only gate. See `cast_pair_claimable` for the exact set of conversions verified against ORT CPU.
 fn cast_claim(node: &NodeView) -> bool {
     if node.num_inputs() != 1 || node.num_outputs() != 1 {
         return false;
@@ -263,11 +307,7 @@ fn cast_claim(node: &NodeView) -> bool {
         (Some(i), Some(o)) => (i, o),
         _ => return false,
     };
-    if is_mlx_float(i.dtype) && is_mlx_float(o.dtype) && i.dtype != o.dtype {
-        return true;
-    }
-    i.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-        && o.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+    cast_pair_claimable(i.dtype, o.dtype)
 }
 
 fn is_bool(t: ort::ONNXTensorElementDataType) -> bool {

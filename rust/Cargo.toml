@@ -8,6 +8,9 @@ repository = "https://github.com/justinchuby/onnxruntime-mlx"
 readme = "README.md"
 keywords = ["onnx", "onnxruntime", "mlx", "apple-silicon", "metal"]
 categories = ["science", "api-bindings", "hardware-support"]
+# Keep repo-only tooling out of the published crate: the *.py files are leak-check /
+# tracing scripts run by CI from the repo (not part of the Rust crate).
+exclude = ["*.py"]
 
 [lib]
 # Pin the lib (and therefore dylib) name so it stays `libonnxruntime_mlx_ep.dylib`

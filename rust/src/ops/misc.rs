@@ -13,11 +13,12 @@ use std::os::raw::c_void;
 
 use crate::engine::{MlxError, NodeDesc, Src, TensorRef, TranslationContext};
 use crate::registry::{
-    is_mlx_float, is_mlx_supported, is_signed_integer, ClaimPredicate, NodeView, OpHandler,
+    is_mlx_float, is_mlx_supported, is_signed_integer, ClaimPredicate, ClaimResult, NodeView, OpHandler,
     OpRegistration, OpRegistry, SlotInfo, K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 const F32: mlx::mlx_dtype = mlx::mlx_dtype__MLX_FLOAT32;
 const I32: mlx::mlx_dtype = mlx::mlx_dtype__MLX_INT32;
@@ -86,17 +87,16 @@ fn constant_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErro
     Ok(())
 }
 
-fn constant_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 0 || node.num_outputs() != 1 {
-        return false;
-    }
+fn constant_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 0 && node.num_outputs() == 1,
+        "expects 0 inputs and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let out = match node.output_info(0) {
         Some(i) if static_tensor(&i) => i,
-        _ => return false,
+        Some(_) => deny!("output shape must be static"),
+        None => deny!("missing output type/shape info"),
     };
-    if node.has_attr("value") || node.has_attr("sparse_value") {
-        return false;
-    }
+    require!(!node.has_attr("value") && !node.has_attr("sparse_value"),
+        "tensor and sparse Constant value forms are not supported");
     struct Form {
         name: &'static str,
         attr_type: ort::OrtOpAttrType,
@@ -116,18 +116,19 @@ fn constant_claim(node: &NodeView) -> bool {
             continue;
         }
         if at != f.attr_type || out.dtype != f.out_type {
-            return false;
+            deny!("attribute {} has incompatible type or output dtype {}", f.name, crate::registry::ort_dtype_name(out.dtype));
         }
         if f.scalar {
             if !out.shape.is_empty() {
-                return false;
+                deny!("scalar attribute {} requires a scalar output", f.name);
             }
         } else if out.shape.len() != 1 {
-            return false;
+            deny!("list attribute {} requires a rank-1 output", f.name);
         }
         matched += 1;
     }
-    matched == 1
+    require!(matched == 1, "requires exactly one supported scalar or list value attribute");
+    Ok(())
 }
 
 // =============================================================================================
@@ -175,14 +176,13 @@ fn is_boundary_value_type(t: ort::ONNXTensorElementDataType) -> bool {
         || t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
 }
 
-fn one_hot_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn one_hot_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 3 && node.num_outputs() == 1,
+        "expects 3 inputs and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let (indices, depth, values, out) =
         match (node.input_info(0), node.input_info(1), node.input_info(2), node.output_info(0)) {
             (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-            _ => return false,
+            _ => deny!("missing tensor type/shape info on an input or the output"),
         };
     if !is_int_index(indices.dtype)
         || depth.dtype != T_INT64
@@ -190,11 +190,11 @@ fn one_hot_claim(node: &NodeView) -> bool {
         || values.dtype != out.dtype
         || !is_boundary_value_type(values.dtype)
     {
-        return false;
+        deny!("indices must be int32/int64; depth int64; values a 2-element supported dtype matching output");
     }
     let depth_val = match node.const_scalar_i64(1) {
         Some(d) if d > 0 => d,
-        _ => return false,
+        _ => deny!("depth must be a positive constant int64 scalar"),
     };
     let output_rank = indices.shape.len() as i64 + 1;
     let mut axis = node.int_attr("axis", -1);
@@ -202,11 +202,12 @@ fn one_hot_claim(node: &NodeView) -> bool {
         axis += output_rank;
     }
     if axis < 0 || axis >= output_rank || out.shape.len() as i64 != output_rank {
-        return false;
+        deny!("axis must be in output rank and output shape must equal indices shape with depth inserted");
     }
     let mut expected = indices.shape.clone();
     expected.insert(axis as usize, depth_val);
-    expected == out.shape
+    require!(expected == out.shape, "output shape must equal indices shape with depth inserted at axis");
+    Ok(())
 }
 
 // =============================================================================================
@@ -231,23 +232,23 @@ fn trilu_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> 
     Ok(())
 }
 
-fn trilu_claim(node: &NodeView) -> bool {
+fn trilu_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni == 0 || ni > 2 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(ni >= 1 && ni <= 2 && node.num_outputs() == 1,
+        "expects 1 or 2 inputs and 1 output, got {ni}in/{}out", node.num_outputs());
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
     if x.shape.len() < 2 || x.dtype != out.dtype || !is_boundary_value_type(x.dtype) {
-        return false;
+        deny!("input must have rank >= 2 and a supported dtype matching output");
     }
     if ni == 2 && node.input_present(1) && node.const_scalar_i64(1).is_none() {
-        return false;
+        deny!("diagonal offset must be a constant int scalar");
     }
     let upper = node.int_attr("upper", 1);
-    upper == 0 || upper == 1
+    require!(upper == 0 || upper == 1, "upper must be 0 or 1");
+    Ok(())
 }
 
 // =============================================================================================
@@ -276,26 +277,24 @@ fn scatter_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError
     Ok(())
 }
 
-fn scatter_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn scatter_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 3 && node.num_outputs() == 1,
+        "expects 3 inputs and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let (data, indices, updates, out) =
         match (node.input_info(0), node.input_info(1), node.input_info(2), node.output_info(0)) {
             (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-            _ => return false,
+            _ => deny!("missing tensor type/shape info on an input or the output"),
         };
     if !static_tensor(&data) || !static_tensor(&indices) || !static_tensor(&updates) || !static_tensor(&out) {
-        return false;
+        deny!("all input and output shapes must be static");
     }
-    is_mlx_float(data.dtype)
-        && is_int_index(indices.dtype)
-        && updates.dtype == data.dtype
-        && out.dtype == data.dtype
-        && !data.shape.is_empty()
-        && indices.shape == updates.shape
-        && indices.shape.len() == data.shape.len()
-        && out.shape == data.shape
+    require!(is_mlx_float(data.dtype) && is_int_index(indices.dtype)
+        && updates.dtype == data.dtype && out.dtype == data.dtype,
+        "data/updates/output must share a float dtype and indices must be int32/int64");
+    require!(!data.shape.is_empty() && indices.shape == updates.shape
+        && indices.shape.len() == data.shape.len() && out.shape == data.shape,
+        "data must be non-scalar; indices/updates ranks and shapes must match; output must match data");
+    Ok(())
 }
 
 // =============================================================================================
@@ -359,19 +358,20 @@ fn det_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     Ok(())
 }
 
-fn det_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn det_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
     if !static_tensor(&x) || !is_mlx_float(x.dtype) || out.dtype != x.dtype {
-        return false;
+        deny!("input shape must be static and input/output must share a float dtype");
     }
     let rank = x.shape.len();
-    rank >= 2 && x.shape[rank - 1] > 0 && x.shape[rank - 1] == x.shape[rank - 2]
+    require!(rank >= 2 && x.shape[rank - 1] > 0 && x.shape[rank - 1] == x.shape[rank - 2],
+        "input must end in non-empty square matrix dimensions");
+    Ok(())
 }
 
 // =============================================================================================
@@ -413,15 +413,16 @@ fn nonzero_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError
     Ok(())
 }
 
-fn nonzero_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn nonzero_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 1 && node.num_outputs() == 1,
+        "NonZero: data-dependent output shape with no MLX primitive — stays on CPU");
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("NonZero: data-dependent output shape with no MLX primitive — stays on CPU"),
     };
-    is_mlx_supported(x.dtype) && out.dtype == T_INT64 && !x.shape.is_empty()
+    require!(is_mlx_supported(x.dtype) && out.dtype == T_INT64 && !x.shape.is_empty(),
+        "NonZero: data-dependent output shape with no MLX primitive — stays on CPU");
+    Ok(())
 }
 
 // =============================================================================================
@@ -558,19 +559,19 @@ fn bind_i64_opt(ctx: &mut TranslationContext, n: &NodeDesc, slot: usize, data: &
     }
 }
 
-fn unique_claim(node: &NodeView) -> bool {
+fn unique_claim(node: &NodeView) -> ClaimResult {
     let no = node.num_outputs();
-    if node.num_inputs() != 1 || no == 0 || no > 4 {
-        return false;
-    }
-    if node.has_attr("axis") {
-        return false; // only the flattened (no-axis) form
-    }
+    require!(node.num_inputs() == 1 && no >= 1 && no <= 4,
+        "Unique: data-dependent output shape with no MLX primitive — stays on CPU");
+    require!(!node.has_attr("axis"),
+        "Unique: data-dependent output shape with no MLX primitive — stays on CPU");
     let x = match node.input_info(0) {
         Some(i) if !i.shape.is_empty() => i,
-        _ => return false,
+        _ => deny!("Unique: data-dependent output shape with no MLX primitive — stays on CPU"),
     };
-    x.dtype == T_FLOAT || x.dtype == T_INT32 || x.dtype == T_INT64
+    require!(x.dtype == T_FLOAT || x.dtype == T_INT32 || x.dtype == T_INT64,
+        "Unique: data-dependent output shape with no MLX primitive — stays on CPU");
+    Ok(())
 }
 
 // =============================================================================================
@@ -582,8 +583,11 @@ fn optional_has_element_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result
     Ok(())
 }
 
-fn optional_has_element_claim(node: &NodeView) -> bool {
-    node.num_inputs() == 1 && node.num_outputs() == 1 && node.input_info(0).is_some()
+fn optional_has_element_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
+    require!(node.input_info(0).is_some(), "only tensor-present Optional forms are supported");
+    Ok(())
 }
 
 fn optional_get_element_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
@@ -592,13 +596,16 @@ fn optional_get_element_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result
     Ok(())
 }
 
-fn optional_get_element_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 || !node.input_present(0) {
-        return false;
-    }
+fn optional_get_element_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 1 && node.num_outputs() == 1 && node.input_present(0),
+        "requires one present input and one output");
     match (node.input_info(0), node.output_info(0)) {
-        (Some(a), Some(b)) => is_mlx_supported(a.dtype) && b.dtype == a.dtype,
-        _ => false,
+        (Some(a), Some(b)) => {
+            require!(is_mlx_supported(a.dtype) && b.dtype == a.dtype,
+                "input/output must share an MLX-supported dtype");
+            Ok(())
+        }
+        _ => deny!("missing tensor type/shape info on input or output"),
     }
 }
 
@@ -687,38 +694,35 @@ fn sce_loss_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErro
     loss_common(ctx, n, true)
 }
 
-fn loss_claim(node: &NodeView, sce: bool) -> bool {
+fn loss_claim(node: &NodeView, sce: bool) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni < 2 || ni > 3 {
-        return false;
-    }
+    require!(ni >= 2 && ni <= 3, "expects 2 or 3 inputs, got {ni}");
     let max_out = if sce { 2 } else { 1 };
     let no = node.num_outputs();
-    if no == 0 || no > max_out {
-        return false;
-    }
+    require!(no >= 1 && no <= max_out, "expects 1 to {max_out} outputs, got {no}");
     let (x, t) = match (node.input_info(0), node.input_info(1)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input"),
     };
-    if !is_mlx_float(x.dtype) || !is_int_index(t.dtype) || x.shape.len() < 2 {
-        return false;
-    }
+    require!(is_mlx_float(x.dtype) && is_int_index(t.dtype) && x.shape.len() >= 2,
+        "scores must be rank >= 2 float and targets must be int32/int64");
     if node.input_present(2) {
         match node.input_info(2) {
             Some(w) if w.dtype == x.dtype && w.shape.len() == 1 => {}
-            _ => return false,
+            _ => deny!("weight must be rank-1 with the scores dtype"),
         }
     }
     let reduction = node.string_attr("reduction", "mean");
-    reduction == "mean" || reduction == "sum" || reduction == "none"
+    require!(reduction == "mean" || reduction == "sum" || reduction == "none",
+        "reduction must be mean, sum, or none (got {reduction})");
+    Ok(())
 }
 
-fn nll_loss_claim(node: &NodeView) -> bool {
+fn nll_loss_claim(node: &NodeView) -> ClaimResult {
     loss_claim(node, false)
 }
 
-fn sce_loss_claim(node: &NodeView) -> bool {
+fn sce_loss_claim(node: &NodeView) -> ClaimResult {
     loss_claim(node, true)
 }
 

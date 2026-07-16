@@ -3,10 +3,11 @@
 
 use crate::engine::{mlx_dtype_from_onnx, MlxError, NodeDesc, TranslationContext};
 use crate::registry::{
-    is_mlx_float, is_signed_integer, scalar_or_suffix_broadcast, K_ANY_OPSET, NodeView,
-    OpRegistration, OpRegistry,
+    is_mlx_float, is_signed_integer, scalar_or_suffix_broadcast, ClaimResult, K_ANY_OPSET,
+    NodeView, OpRegistration, OpRegistry,
 };
 use crate::sys::mlx;
+use crate::{deny, require};
 
 // ---- handlers -----------------------------------------------------------------------------------
 
@@ -279,86 +280,151 @@ fn clip_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
 
 // ---- claim predicates ---------------------------------------------------------------------------
 
-fn unary_same_type_claim(node: &NodeView, allow_signed_int: bool) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
-    match (node.input_info(0), node.output_info(0)) {
-        (Some(i), Some(o)) => {
-            i.dtype == o.dtype && (is_mlx_float(i.dtype) || (allow_signed_int && is_signed_integer(i.dtype)))
+fn unary_same_type_claim(node: &NodeView, allow_signed_int: bool) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (i, o) = match (node.input_info(0), node.output_info(0)) {
+        (Some(i), Some(o)) => (i, o),
+        _ => deny!("missing tensor type/shape info on input or output"),
+    };
+    require!(
+        i.dtype == o.dtype,
+        "input/output must share one dtype (got {} -> {})",
+        crate::registry::ort_dtype_name(i.dtype),
+        crate::registry::ort_dtype_name(o.dtype)
+    );
+    require!(
+        is_mlx_float(i.dtype) || (allow_signed_int && is_signed_integer(i.dtype)),
+        "dtype {} not supported here ({})",
+        crate::registry::ort_dtype_name(i.dtype),
+        if allow_signed_int {
+            "float fp32/fp16/bf16 or signed integer only"
+        } else {
+            "float fp32/fp16/bf16 only"
         }
-        _ => false,
-    }
+    );
+    Ok(())
 }
 
-fn float_unary_claim(node: &NodeView) -> bool {
+fn float_unary_claim(node: &NodeView) -> ClaimResult {
     unary_same_type_claim(node, false)
 }
 
-fn signed_numeric_unary_claim(node: &NodeView) -> bool {
+fn signed_numeric_unary_claim(node: &NodeView) -> ClaimResult {
     unary_same_type_claim(node, true)
 }
 
 /// Div: fp32/fp16/bf16, same dtype in/out, scalar-or-suffix broadcast.
-fn div_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn div_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (a, b, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    a.dtype == b.dtype
-        && b.dtype == out.dtype
-        && is_mlx_float(a.dtype)
-        && scalar_or_suffix_broadcast(&a.shape, &b.shape)
+    require!(
+        a.dtype == b.dtype && b.dtype == out.dtype,
+        "inputs/output must share one dtype (got {}, {} -> {})",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(b.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        is_mlx_float(a.dtype),
+        "dtype {} not supported (float fp32/fp16/bf16 only)",
+        crate::registry::ort_dtype_name(a.dtype)
+    );
+    require!(
+        scalar_or_suffix_broadcast(&a.shape, &b.shape),
+        "only scalar or trailing-suffix broadcast is supported (shapes {:?} vs {:?})",
+        a.shape,
+        b.shape
+    );
+    Ok(())
 }
 
-fn relu_claim(node: &NodeView) -> bool {
+fn relu_claim(node: &NodeView) -> ClaimResult {
     float_unary_claim(node)
 }
 
-fn tanh_claim(node: &NodeView) -> bool {
+fn tanh_claim(node: &NodeView) -> ClaimResult {
     float_unary_claim(node)
 }
 
 /// Pow: float base (fp32/fp16/bf16), output keeps the base dtype, exponent may be any numeric type
 /// (cast to the base dtype in the handler), scalar-or-suffix broadcast. Integer bases are left to ORT
 /// CPU (which serves them correctly).
-fn pow_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn pow_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (a, b, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    is_mlx_float(a.dtype)
-        && a.dtype == out.dtype
-        && scalar_or_suffix_broadcast(&a.shape, &b.shape)
+    require!(
+        is_mlx_float(a.dtype),
+        "base dtype {} not supported (float fp32/fp16/bf16 only)",
+        crate::registry::ort_dtype_name(a.dtype)
+    );
+    require!(
+        a.dtype == out.dtype,
+        "output dtype must match base dtype (got {} -> {})",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        scalar_or_suffix_broadcast(&a.shape, &b.shape),
+        "only scalar or trailing-suffix broadcast is supported (shapes {:?} vs {:?})",
+        a.shape,
+        b.shape
+    );
+    Ok(())
 }
 
 /// Clip: fp32/fp16/bf16 input/output; any present `min`/`max` inputs must share the input dtype.
-fn clip_claim(node: &NodeView) -> bool {
-    if node.num_inputs() < 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn clip_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() >= 1 && node.num_outputs() == 1,
+        "expects 1+ inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (i, o) = match (node.input_info(0), node.output_info(0)) {
         (Some(i), Some(o)) => (i, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(i.dtype) || i.dtype != o.dtype {
-        return false;
-    }
+    require!(
+        is_mlx_float(i.dtype) && i.dtype == o.dtype,
+        "input/output must be the same float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(i.dtype),
+        crate::registry::ort_dtype_name(o.dtype)
+    );
     for b in [1usize, 2] {
         if node.input_present(b) {
             match node.input_info(b) {
                 Some(bi) if bi.dtype == i.dtype => {}
-                _ => return false,
+                Some(bi) => deny!(
+                    "bound input[{b}] dtype {} must match data dtype {}",
+                    crate::registry::ort_dtype_name(bi.dtype),
+                    crate::registry::ort_dtype_name(i.dtype)
+                ),
+                None => deny!("bound input[{b}] has no tensor type/shape info"),
             }
         }
     }
-    true
+    Ok(())
 }
 
 fn reg(

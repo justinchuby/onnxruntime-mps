@@ -17,10 +17,12 @@
 
 use crate::engine::{MlxError, NodeDesc, SubgraphDesc, TensorRef, TranslationContext};
 use crate::registry::{
-    ClaimPredicate, GraphView, NodeView, OpHandler, OpRegistration, OpRegistry, K_ANY_OPSET,
+    ClaimPredicate, ClaimResult, GraphView, NodeView, OpHandler, OpRegistration, OpRegistry,
+    K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- shared helpers -----------------------------------------------------------------------------
 
@@ -80,44 +82,58 @@ fn if_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     Ok(())
 }
 
-fn if_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() == 0 {
-        return false;
-    }
-    if !is_bool(node, 0) {
-        return false;
-    }
+fn if_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() > 0,
+        "expects 1 condition input and at least 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(is_bool(node, 0), "condition input must have bool dtype");
     let subs = node.subgraphs();
-    if subs.len() != 2 {
-        return false;
-    }
+    require!(
+        subs.len() == 2,
+        "expects then_branch and else_branch subgraphs"
+    );
     let (mut have_then, mut have_else) = (false, false);
     for (name, body) in &subs {
         match name.as_str() {
             "then_branch" => have_then = true,
             "else_branch" => have_else = true,
-            _ => return false,
+            _ => deny!("unsupported subgraph attribute {:?}", name),
         }
-        if !body.input_names().is_empty() {
-            return false; // If branches take no formal inputs
-        }
-        if body.output_names().len() != node.num_outputs() {
-            return false;
-        }
-        if !body_claimable(body) {
-            return false;
-        }
+        require!(
+            body.input_names().is_empty(),
+            "{} must have no formal inputs",
+            name
+        );
+        require!(
+            body.output_names().len() == node.num_outputs(),
+            "{} has {} outputs but the If node has {}",
+            name,
+            body.output_names().len(),
+            node.num_outputs()
+        );
+        require!(
+            body_claimable(body),
+            "{} contains an unclaimable operation",
+            name
+        );
     }
-    have_then && have_else
+    require!(
+        have_then && have_else,
+        "requires both then_branch and else_branch"
+    );
+    Ok(())
 }
 
 // ---- Scan ---------------------------------------------------------------------------------------
 
 fn scan_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
-    let num_scan = *n
-        .ints
-        .get("num_scan_inputs")
-        .ok_or_else(|| "MLX Scan: missing num_scan_inputs".to_string())? as usize;
+    let num_scan =
+        *n.ints
+            .get("num_scan_inputs")
+            .ok_or_else(|| "MLX Scan: missing num_scan_inputs".to_string())? as usize;
     let num_state = n.inputs.len() - num_scan;
     let body = find_body(n, "body")
         .ok_or_else(|| "MLX Scan: missing body subgraph".to_string())?
@@ -179,53 +195,78 @@ fn scan_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     Ok(())
 }
 
-fn scan_claim(node: &NodeView) -> bool {
+fn scan_claim(node: &NodeView) -> ClaimResult {
     let ninputs = node.num_inputs();
     let noutputs = node.num_outputs();
     let num_scan = node.int_attr("num_scan_inputs", -1);
-    if num_scan <= 0 || (ninputs as i64) < num_scan {
-        return false;
-    }
+    require!(
+        num_scan > 0 && (ninputs as i64) >= num_scan,
+        "num_scan_inputs must be positive and no greater than the {} inputs, got {}",
+        ninputs,
+        num_scan
+    );
     let num_state = ninputs as i64 - num_scan;
-    if num_state < 0 {
-        return false;
-    }
+    require!(num_state >= 0, "num_scan_inputs exceeds input count");
 
-    if !all_zero_ints_attr(node, "scan_input_directions")
-        || !all_zero_ints_attr(node, "scan_output_directions")
-        || !all_zero_ints_attr(node, "scan_input_axes")
-        || !all_zero_ints_attr(node, "scan_output_axes")
-    {
-        return false;
-    }
+    require!(
+        all_zero_ints_attr(node, "scan_input_directions"),
+        "only forward scan_input_directions are supported"
+    );
+    require!(
+        all_zero_ints_attr(node, "scan_output_directions"),
+        "only forward scan_output_directions are supported"
+    );
+    require!(
+        all_zero_ints_attr(node, "scan_input_axes"),
+        "only scan_input_axes=0 is supported"
+    );
+    require!(
+        all_zero_ints_attr(node, "scan_output_axes"),
+        "only scan_output_axes=0 is supported"
+    );
 
-    // Every scan input must have a statically-known, non-empty scan axis (axis 0) for a static unroll.
     for i in num_state..ninputs as i64 {
-        match node.input_info(i as usize) {
-            Some(info) => {
-                if info.shape.is_empty() || info.shape[0] < 1 {
-                    return false;
-                }
-            }
-            None => return false,
-        }
+        let info = match node.input_info(i as usize) {
+            Some(info) => info,
+            None => deny!("scan input {} lacks tensor type/shape info", i),
+        };
+        require!(
+            !info.shape.is_empty() && info.shape[0] >= 1,
+            "scan input {} must have a statically known non-empty axis 0, got shape {:?}",
+            i,
+            info.shape
+        );
     }
 
     let subs = node.subgraphs();
-    if subs.len() != 1 || subs[0].0 != "body" {
-        return false;
-    }
+    require!(
+        subs.len() == 1 && subs[0].0 == "body",
+        "requires exactly one body subgraph"
+    );
     let body = &subs[0].1;
-    if body.input_names().len() as i64 != num_state + num_scan {
-        return false;
-    }
-    if (body.output_names().len() as i64) < num_state {
-        return false;
-    }
-    if noutputs as i64 != body.output_names().len() as i64 {
-        return false;
-    }
-    body_claimable(body)
+    require!(
+        body.input_names().len() as i64 == num_state + num_scan,
+        "body has {} inputs, expected {} carried-state plus scan inputs",
+        body.input_names().len(),
+        num_state + num_scan
+    );
+    require!(
+        (body.output_names().len() as i64) >= num_state,
+        "body has {} outputs but requires at least {} carried-state outputs",
+        body.output_names().len(),
+        num_state
+    );
+    require!(
+        noutputs == body.output_names().len(),
+        "Scan has {} outputs but body has {}",
+        noutputs,
+        body.output_names().len()
+    );
+    require!(
+        body_claimable(body),
+        "body contains an unclaimable operation"
+    );
+    Ok(())
 }
 
 // ---- Loop ---------------------------------------------------------------------------------------
@@ -302,42 +343,36 @@ fn loop_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     Ok(())
 }
 
-fn loop_claim(node: &NodeView) -> bool {
+fn loop_claim(node: &NodeView) -> ClaimResult {
+    const UNSUPPORTED: &str = "Loop: only static carried-state loops (constant trip-count + passthrough cond, no scan outputs) are unrolled; scan outputs / dynamic control stay on CPU";
     let ninputs = node.num_inputs();
-    if ninputs < 2 {
-        return false; // require explicit M and cond (MVP)
-    }
+    require!(ninputs >= 2, "{}", UNSUPPORTED);
     let num_state = ninputs - 2;
-    // M (int64 scalar) and cond (bool) must be present so we can read them host-side.
-    if !is_int64(node, 0) || !is_bool(node, 1) {
-        return false;
-    }
+    require!(is_int64(node, 0) && is_bool(node, 1), "{}", UNSUPPORTED);
 
     let subs = node.subgraphs();
-    if subs.len() != 1 || subs[0].0 != "body" {
-        return false;
-    }
+    require!(subs.len() == 1 && subs[0].0 == "body", "{}", UNSUPPORTED);
     let body = &subs[0].1;
-    // body inputs = [iter_num, cond_in, state...]; carried-state-only (no scan outputs) in this MVP,
-    // so body outputs = [cond_out, state...] and node outputs = [state...].
-    if body.input_names().len() != 2 + num_state {
-        return false;
-    }
-    if body.output_names().len() != 1 + num_state {
-        return false;
-    }
-    if node.num_outputs() != num_state {
-        return false;
-    }
-    if !loop_cond_is_passthrough(body) {
-        return false;
-    }
-    body_claimable(body)
+    require!(body.input_names().len() == 2 + num_state, "{}", UNSUPPORTED);
+    require!(
+        body.output_names().len() == 1 + num_state,
+        "{}",
+        UNSUPPORTED
+    );
+    require!(node.num_outputs() == num_state, "{}", UNSUPPORTED);
+    require!(loop_cond_is_passthrough(body), "{}", UNSUPPORTED);
+    require!(body_claimable(body), "{}", UNSUPPORTED);
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------
 
-fn reg(registry: &mut OpRegistry, op_type: &'static str, handler: OpHandler, claim: ClaimPredicate) {
+fn reg(
+    registry: &mut OpRegistry,
+    op_type: &'static str,
+    handler: OpHandler,
+    claim: ClaimPredicate,
+) {
     registry.register(OpRegistration {
         domain: "",
         op_type,

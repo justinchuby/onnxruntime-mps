@@ -3,6 +3,7 @@
 //! (GetCapability) and the run-time translator dispatch through the SAME table, so "claimed" and
 //! "translatable" can never disagree (faithful port of `op_registry.{h,cc}`).
 
+use std::borrow::Cow;
 use std::os::raw::c_char;
 use std::sync::LazyLock;
 
@@ -12,9 +13,39 @@ use crate::sys::ort;
 /// A translation handler: reads a NodeDesc, emits MLX ops through the context, binds the outputs.
 pub type OpHandler = fn(&mut TranslationContext, &NodeDesc) -> Result<(), MlxError>;
 
+/// The outcome of a claim predicate: `Ok(())` claims the node; `Err(reason)` declines it and carries
+/// a colocated, human-readable explanation of WHY (surfaced verbatim by the tracer's "claiming view"
+/// and by `MLX_EP_CLAIM_DEBUG`). Because the reason travels WITH the decision, every decline is
+/// guaranteed to have one and it can never drift out of sync with the predicate's actual logic —
+/// there is no separate reason table to maintain.
+pub type ClaimResult = Result<(), Cow<'static, str>>;
+
 /// A claim-time predicate: given the concrete ONNX node, decide whether MLX can translate it exactly
-/// (dtypes / shapes / attributes / input form). The (domain, op_type, opset) key is matched first.
-pub type ClaimPredicate = fn(&NodeView) -> bool;
+/// (dtypes / shapes / attributes / input form) and, when it cannot, say why. The (domain, op_type,
+/// opset) key is matched first.
+pub type ClaimPredicate = fn(&NodeView) -> ClaimResult;
+
+/// Decline the current claim predicate with a colocated reason (`format!`-style args, including
+/// inline captures like `deny!("rank {rank} unsupported")`). Use inside a `-> ClaimResult` function.
+/// The reason string is only built on the decline path, so its allocation never touches a claim
+/// that succeeds.
+#[macro_export]
+macro_rules! deny {
+    ($($fmt:tt)+) => {
+        return ::core::result::Result::Err(::std::borrow::Cow::Owned(format!($($fmt)+)))
+    };
+}
+
+/// Guard a claim requirement: if `$cond` is false, decline with the given reason (`format!`-style,
+/// inline captures allowed). `require!(rank <= 4, "rank {rank} > 4 unsupported")`.
+#[macro_export]
+macro_rules! require {
+    ($cond:expr, $($fmt:tt)+) => {
+        if !($cond) {
+            return ::core::result::Result::Err(::std::borrow::Cow::Owned(format!($($fmt)+)));
+        }
+    };
+}
 
 /// Sentinel for an unbounded opset endpoint.
 pub const K_ANY_OPSET: i32 = -1;
@@ -121,24 +152,37 @@ pub fn translate(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxEr
     r
 }
 
-/// Claim-time node predicate consulted from GetCapability. True iff the registry has a matching
-/// (domain, op, opset) entry AND that entry's claim predicate accepts this concrete node.
-pub fn claimable(node: &NodeView) -> bool {
+/// The claim decision for `node`, WITH its reason on decline. `Ok(())` = MLX can translate it
+/// exactly; `Err(reason)` = it falls back to CPU, and `reason` explains why (either "no registry
+/// entry for this (domain, op, opset)" or the colocated message the matching claim predicate
+/// returned). This is the single source of truth: `claimable` is just `.is_ok()`, and the tracer /
+/// `MLX_EP_CLAIM_DEBUG` surface the `Err` string directly — no separate reason table to drift.
+pub fn claim_decision(node: &NodeView) -> ClaimResult {
     match registry().find_entry(&node.domain(), &node.op_type(), node.since_version()) {
         Some(entry) => (entry.claim)(node),
-        None => false,
+        None => {
+            let op = node.op_type();
+            let dom = node.domain();
+            let where_ = if dom.is_empty() {
+                String::new()
+            } else {
+                format!(" (domain {dom})")
+            };
+            Err(Cow::Owned(format!(
+                "no MLX handler for {op}{where_} at opset {} — add a claim+handler in rust/src/ops/ and register it",
+                node.since_version()
+            )))
+        }
     }
 }
 
-/// Best-effort, human-readable explanation of WHY MLX declined to claim `node` — surfaced in the
-/// tracer's "claiming view" so a user can see the per-op fallback reason (which nodes went to CPU
-/// and roughly why). Only called when observability is active, so its extra FFI reads never touch
-/// the traced-off fast path. The reasons are heuristic (the claim predicates return a bare bool):
-///   * no registry entry for the (domain, op, opset) → "no MLX handler (op/opset)";
-///   * an entry exists but the predicate declined → inspect the node for the common causes
-///     (fp64 / other unsupported dtype) and otherwise report a generic "claim predicate declined".
-/// A short ORT element-type name for diagnostics.
-fn ort_dtype_name(t: ort::ONNXTensorElementDataType) -> &'static str {
+/// Claim-time node predicate consulted from GetCapability. True iff `claim_decision` succeeds.
+pub fn claimable(node: &NodeView) -> bool {
+    claim_decision(node).is_ok()
+}
+
+/// A short ORT element-type name for diagnostics (usable by claim predicates when building reasons).
+pub fn ort_dtype_name(t: ort::ONNXTensorElementDataType) -> &'static str {
     #[allow(non_upper_case_globals)]
     match t {
         ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT => "fp32",
@@ -153,99 +197,6 @@ fn ort_dtype_name(t: ort::ONNXTensorElementDataType) -> &'static str {
         ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL => "bool",
         _ => "other",
     }
-}
-
-/// A human-readable, **actionable** reason a specific node was not claimed — meant to give a
-/// developer a concrete idea of how to make it claimable. Best-effort re-diagnosis (the claim
-/// predicate itself only returns a bool): reports the definite cause when knowable (no handler /
-/// fp64), an op-specific constraint hint for the ops that commonly fragment real models, then a
-/// dynamic-shape / generic fallback that points at the op's claim predicate.
-pub fn decline_reason(node: &NodeView) -> String {
-    let op = node.op_type();
-    let entry = registry().find_entry(&node.domain(), &op, node.since_version());
-    if entry.is_none() {
-        let dom = node.domain();
-        let where_ = if dom.is_empty() { String::new() } else { format!(" (domain {dom})") };
-        return format!(
-            "no MLX handler for {op}{where_} at opset {} — add a claim+handler in rust/src/ops/ and register it",
-            node.since_version()
-        );
-    }
-
-    // Definite cause: fp64 anywhere (MLX has no float64).
-    for i in 0..node.num_inputs() {
-        if let Some(info) = node.input_info(i) {
-            #[allow(non_upper_case_globals)]
-            if info.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE {
-                return format!("input[{i}] is fp64 — MLX has no float64; cast the model to fp32/fp16");
-            }
-        }
-    }
-
-    // Op-specific constraint hints (mirror each op's claim predicate) — the ops that most often
-    // fragment real graphs. Each says what IS accepted so the fix is obvious.
-    match op.as_str() {
-        "Resize" => {
-            return "Resize: only static (constant) `sizes`/`scales` are claimed; this node's are \
-                    runtime/dynamic — precompute them or export a static-shape model"
-                .to_string();
-        }
-        "Softmax" | "LogSoftmax" if node.since_version() < 13 => {
-            let axis = node.int_attr("axis", -1);
-            return format!(
-                "{op} opset<13 with axis={axis} coerces to 2D (reduces over ALL trailing axes), \
-                 which is unimplemented — re-export at opset>=13 (per-axis softmax)"
-            );
-        }
-        "Cast" | "CastLike" => {
-            let from = node.input_info(0).map(|i| ort_dtype_name(i.dtype)).unwrap_or("?");
-            let to = node.output_info(0).map(|o| ort_dtype_name(o.dtype)).unwrap_or("?");
-            return format!(
-                "Cast {from}->{to}: this dtype pair isn't claimed (bool/uint/fp64 and non-verified \
-                 pairs stay on CPU) — see cast_claim in rust/src/ops/elementwise.rs"
-            );
-        }
-        "Loop" => {
-            return "Loop: only static carried-state loops (explicit trip-count + passthrough cond, \
-                    no scan outputs) are unrolled; this one uses scan outputs / dynamic control — CPU"
-                .to_string();
-        }
-        "Tile" => {
-            return "Tile: only a constant `repeats` input is claimed; this node's is runtime — CPU"
-                .to_string();
-        }
-        "Pad" => {
-            return "Pad: only constant, non-negative `pads` with mode=constant are claimed \
-                    (runtime pads, negative/cropping pads, or reflect/edge modes → CPU)"
-                .to_string();
-        }
-        "NonMaxSuppression" | "TopK" | "RoiAlign" | "NonZero" => {
-            return format!("{op}: no MLX primitive — data-dependent op, stays on CPU (post-processing)");
-        }
-        _ => {}
-    }
-
-    // Generic: a dynamic/unknown dim on an input the predicate needs static (best-effort).
-    for i in 0..node.num_inputs() {
-        if let Some(info) = node.input_info(i) {
-            if !info.shape.is_empty() && info.shape.iter().any(|&d| d <= 0) {
-                return format!(
-                    "input[{i}] shape {:?} has a dynamic/unknown dim the {op} claim needs static — \
-                     give it a static shape, or extend the claim to resolve it at trace time",
-                    info.shape
-                );
-            }
-        }
-    }
-
-    // Fallback: point at the predicate. Include the input dtype so dtype-form declines are visible.
-    let dtypes: Vec<&str> = (0..node.num_inputs())
-        .filter_map(|i| node.input_info(i).map(|s| ort_dtype_name(s.dtype)))
-        .collect();
-    format!(
-        "{op}: an attribute/shape/dtype form the claim predicate rejects (inputs: {dtypes:?}) — \
-         inspect {op}'s claim in rust/src/ops/ (or run with MLX_EP_CLAIM_DEBUG)"
-    )
 }
 
 // ---- Claim-time node view -----------------------------------------------------------------------

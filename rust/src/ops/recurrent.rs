@@ -14,9 +14,11 @@
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::registry::{
-    is_mlx_float, ClaimPredicate, NodeView, OpHandler, OpRegistration, OpRegistry, K_ANY_OPSET,
+    is_mlx_float, ClaimPredicate, ClaimResult, NodeView, OpHandler, OpRegistration, OpRegistry,
+    K_ANY_OPSET,
 };
 use crate::sys::mlx;
+use crate::{deny, require};
 
 // ---- small handler helpers ----------------------------------------------------------------------
 
@@ -33,7 +35,11 @@ fn gate_count(op: &str) -> i32 {
 }
 
 /// A dtype-matched scalar (float value cast to `dt`).
-fn scalar(ctx: &mut TranslationContext, value: f32, dt: mlx::mlx_dtype) -> Result<mlx::mlx_array, MlxError> {
+fn scalar(
+    ctx: &mut TranslationContext,
+    value: f32,
+    dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.scalar_f32(value);
     if dt == mlx::mlx_dtype__MLX_FLOAT32 {
         Ok(s)
@@ -43,7 +49,11 @@ fn scalar(ctx: &mut TranslationContext, value: f32, dt: mlx::mlx_dtype) -> Resul
 }
 
 /// Drop leading axis 0 by selecting index d: arr[d] (rank R -> rank R-1).
-fn dir_slab(ctx: &mut TranslationContext, arr: mlx::mlx_array, d: i32) -> Result<mlx::mlx_array, MlxError> {
+fn dir_slab(
+    ctx: &mut TranslationContext,
+    arr: mlx::mlx_array,
+    d: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let sh = ctx.shape_of(arr);
     let mut start = vec![0i32; sh.len()];
     let mut stop = sh.clone();
@@ -55,18 +65,33 @@ fn dir_slab(ctx: &mut TranslationContext, arr: mlx::mlx_array, d: i32) -> Result
 }
 
 /// Columns [g*H, (g+1)*H) of a [rows, gates*H] gate block.
-fn gate_col(ctx: &mut TranslationContext, m: mlx::mlx_array, g: i32, h: i32) -> Result<mlx::mlx_array, MlxError> {
+fn gate_col(
+    ctx: &mut TranslationContext,
+    m: mlx::mlx_array,
+    g: i32,
+    h: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let sh = ctx.shape_of(m);
     ctx.slice(m, &[0, g * h], &[sh[0], (g + 1) * h])
 }
 
 /// Sub-vector [a, b) of a 1-D array.
-fn vec1d(ctx: &mut TranslationContext, v: mlx::mlx_array, a: i32, b: i32) -> Result<mlx::mlx_array, MlxError> {
+fn vec1d(
+    ctx: &mut TranslationContext,
+    v: mlx::mlx_array,
+    a: i32,
+    b: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.slice(v, &[a], &[b])
 }
 
 /// Rows [a, b) of a 2-D [rows, cols] array.
-fn rows(ctx: &mut TranslationContext, m: mlx::mlx_array, a: i32, b: i32) -> Result<mlx::mlx_array, MlxError> {
+fn rows(
+    ctx: &mut TranslationContext,
+    m: mlx::mlx_array,
+    a: i32,
+    b: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let sh = ctx.shape_of(m);
     ctx.slice(m, &[a, 0], &[b, sh[1]])
 }
@@ -80,13 +105,24 @@ fn tanh_(ctx: &mut TranslationContext, x: mlx::mlx_array) -> Result<mlx::mlx_arr
 }
 
 /// Per-timestep slab Xproj[t] -> [batch, gates*H] from a [S, batch, gates*H] tensor.
-fn step_slab(ctx: &mut TranslationContext, xproj: mlx::mlx_array, t: i32, b: i32, gh: i32) -> Result<mlx::mlx_array, MlxError> {
+fn step_slab(
+    ctx: &mut TranslationContext,
+    xproj: mlx::mlx_array,
+    t: i32,
+    b: i32,
+    gh: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.slice(xproj, &[t, 0, 0], &[t + 1, b, gh])?;
     ctx.reshape(s, &[b, gh])
 }
 
 /// Clamp `pre` to [-clip, clip] when clip > 0.
-fn clip_(ctx: &mut TranslationContext, pre: mlx::mlx_array, clip: f32, dt: mlx::mlx_dtype) -> Result<mlx::mlx_array, MlxError> {
+fn clip_(
+    ctx: &mut TranslationContext,
+    pre: mlx::mlx_array,
+    clip: f32,
+    dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
     if clip <= 0.0 {
         return Ok(pre);
     }
@@ -143,7 +179,12 @@ fn run_direction(
     let mut rb: Option<mlx::mlx_array> = None;
     let has_bias = din.has_bias;
     if has_bias {
-        let bd = dir_slab(ctx, din.b.ok_or_else(|| "RNN: bias flagged but missing".to_string())?, d)?; // [2*G*H]
+        let bd = dir_slab(
+            ctx,
+            din.b
+                .ok_or_else(|| "RNN: bias flagged but missing".to_string())?,
+            d,
+        )?; // [2*G*H]
         let wb = vec1d(ctx, bd, 0, gh)?;
         rb = Some(vec1d(ctx, bd, gh, 2 * gh)?);
         xproj = ctx.add(xproj, wb)?;
@@ -151,13 +192,23 @@ fn run_direction(
 
     // Initial states.
     let mut h_prev = if din.has_init_h {
-        dir_slab(ctx, din.init_h.ok_or_else(|| "RNN: initial_h flagged but missing".to_string())?, d)?
+        dir_slab(
+            ctx,
+            din.init_h
+                .ok_or_else(|| "RNN: initial_h flagged but missing".to_string())?,
+            d,
+        )?
     } else {
         ctx.zeros(&[b_sz, h], dt)?
     };
     let mut c_prev = if op == "LSTM" {
         if din.has_init_c {
-            Some(dir_slab(ctx, din.init_c.ok_or_else(|| "LSTM: initial_c flagged but missing".to_string())?, d)?)
+            Some(dir_slab(
+                ctx,
+                din.init_c
+                    .ok_or_else(|| "LSTM: initial_c flagged but missing".to_string())?,
+                d,
+            )?)
         } else {
             Some(ctx.zeros(&[b_sz, h], dt)?)
         }
@@ -168,7 +219,12 @@ fn run_direction(
     // Peepholes (LSTM).
     let (mut pi, mut po, mut pf) = (None, None, None);
     if op == "LSTM" && din.has_peephole {
-        let pd = dir_slab(ctx, din.p.ok_or_else(|| "LSTM: peephole flagged but missing".to_string())?, d)?; // [3*H]
+        let pd = dir_slab(
+            ctx,
+            din.p
+                .ok_or_else(|| "LSTM: peephole flagged but missing".to_string())?,
+            d,
+        )?; // [3*H]
         pi = Some(vec1d(ctx, pd, 0, h)?);
         po = Some(vec1d(ctx, pd, h, 2 * h)?);
         pf = Some(vec1d(ctx, pd, 2 * h, 3 * h)?);
@@ -180,7 +236,10 @@ fn run_direction(
         let xg = step_slab(ctx, xproj, t, b_sz, gh)?; // [B, G*H] (already carries Wb)
         let mut hf = ctx.matmul(h_prev, rdt)?; // [B, G*H]
         if has_bias {
-            hf = ctx.add(hf, rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?)?;
+            hf = ctx.add(
+                hf,
+                rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?,
+            )?;
         }
 
         if op == "RNN" {
@@ -214,7 +273,12 @@ fn run_direction(
                 let rh_state = ctx.mul(rt, h_prev)?;
                 let mut hh = ctx.matmul(rh_state, rht)?;
                 if has_bias {
-                    let rbh = vec1d(ctx, rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?, 2 * h, 3 * h)?;
+                    let rbh = vec1d(
+                        ctx,
+                        rb.ok_or_else(|| "RNN: recurrent bias missing".to_string())?,
+                        2 * h,
+                        3 * h,
+                    )?;
                     hh = ctx.add(hh, rbh)?;
                 }
                 ctx.add(xh, hh)?
@@ -244,9 +308,15 @@ fn run_direction(
             let mut fpre = ctx.add(xf, hfg)?;
             if din.has_peephole {
                 let cp = c_prev.ok_or_else(|| "LSTM: cell state missing".to_string())?;
-                let pic = ctx.mul(pi.ok_or_else(|| "LSTM: peephole pi missing".to_string())?, cp)?;
+                let pic = ctx.mul(
+                    pi.ok_or_else(|| "LSTM: peephole pi missing".to_string())?,
+                    cp,
+                )?;
                 ipre = ctx.add(ipre, pic)?;
-                let pfc = ctx.mul(pf.ok_or_else(|| "LSTM: peephole pf missing".to_string())?, cp)?;
+                let pfc = ctx.mul(
+                    pf.ok_or_else(|| "LSTM: peephole pf missing".to_string())?,
+                    cp,
+                )?;
                 fpre = ctx.add(fpre, pfc)?;
             }
             let ipc = clip_(ctx, ipre, clip, dt)?;
@@ -269,7 +339,10 @@ fn run_direction(
 
             let mut opre = ctx.add(xo, ho)?;
             if din.has_peephole {
-                let poc = ctx.mul(po.ok_or_else(|| "LSTM: peephole po missing".to_string())?, c_new)?;
+                let poc = ctx.mul(
+                    po.ok_or_else(|| "LSTM: peephole po missing".to_string())?,
+                    c_new,
+                )?;
                 opre = ctx.add(opre, poc)?;
             }
             let opc = clip_(ctx, opre, clip, dt)?;
@@ -352,10 +425,55 @@ fn recurrent_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
 
     let mut results: Vec<DirResult> = Vec::new();
     if bidir {
-        results.push(run_direction(ctx, &op, &din, x, 0, false, s_len, b_sz, h, gh, clip, linear_before_reset, input_forget, dt)?);
-        results.push(run_direction(ctx, &op, &din, x, 1, true, s_len, b_sz, h, gh, clip, linear_before_reset, input_forget, dt)?);
+        results.push(run_direction(
+            ctx,
+            &op,
+            &din,
+            x,
+            0,
+            false,
+            s_len,
+            b_sz,
+            h,
+            gh,
+            clip,
+            linear_before_reset,
+            input_forget,
+            dt,
+        )?);
+        results.push(run_direction(
+            ctx,
+            &op,
+            &din,
+            x,
+            1,
+            true,
+            s_len,
+            b_sz,
+            h,
+            gh,
+            clip,
+            linear_before_reset,
+            input_forget,
+            dt,
+        )?);
     } else {
-        results.push(run_direction(ctx, &op, &din, x, 0, reverse, s_len, b_sz, h, gh, clip, linear_before_reset, input_forget, dt)?);
+        results.push(run_direction(
+            ctx,
+            &op,
+            &din,
+            x,
+            0,
+            reverse,
+            s_len,
+            b_sz,
+            h,
+            gh,
+            clip,
+            linear_before_reset,
+            input_forget,
+            dt,
+        )?);
     }
     let num_dir = results.len();
 
@@ -371,7 +489,10 @@ fn recurrent_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
                 Some(prev) => ctx.concat2(prev, ydir, 1)?,
             });
         }
-        ctx.bind(&n.outputs[0], y.ok_or_else(|| "RNN: no directions produced Y".to_string())?);
+        ctx.bind(
+            &n.outputs[0],
+            y.ok_or_else(|| "RNN: no directions produced Y".to_string())?,
+        );
     }
 
     // Y_h : [num_dir, B, H].
@@ -384,20 +505,31 @@ fn recurrent_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
                 Some(prev) => ctx.concat2(prev, hd, 0)?,
             });
         }
-        ctx.bind(&n.outputs[1], yh.ok_or_else(|| "RNN: no directions produced Y_h".to_string())?);
+        ctx.bind(
+            &n.outputs[1],
+            yh.ok_or_else(|| "RNN: no directions produced Y_h".to_string())?,
+        );
     }
 
     // Y_c : [num_dir, B, H] (LSTM only).
     if op == "LSTM" && n.outputs.len() >= 3 && !n.outputs[2].name.is_empty() {
         let mut yc: Option<mlx::mlx_array> = None;
         for d in 0..num_dir {
-            let cd = ctx.expand_dims(results[d].final_c.ok_or_else(|| "LSTM: final cell state missing".to_string())?, 0)?; // [1,B,H]
+            let cd = ctx.expand_dims(
+                results[d]
+                    .final_c
+                    .ok_or_else(|| "LSTM: final cell state missing".to_string())?,
+                0,
+            )?; // [1,B,H]
             yc = Some(match yc {
                 None => cd,
                 Some(prev) => ctx.concat2(prev, cd, 0)?,
             });
         }
-        ctx.bind(&n.outputs[2], yc.ok_or_else(|| "LSTM: no directions produced Y_c".to_string())?);
+        ctx.bind(
+            &n.outputs[2],
+            yc.ok_or_else(|| "LSTM: no directions produced Y_c".to_string())?,
+        );
     }
     Ok(())
 }
@@ -433,74 +565,89 @@ fn activations_are_default(op: &str, acts: &[String]) -> bool {
 }
 
 /// Shared claim predicate for RNN / GRU / LSTM.
-fn recurrent_claim(node: &NodeView, op: &str) -> bool {
+fn recurrent_claim(node: &NodeView, op: &str) -> ClaimResult {
     let ninputs = node.num_inputs();
-    if ninputs < 3 || node.num_outputs() == 0 {
-        return false;
-    }
+    require!(
+        ninputs >= 3 && node.num_outputs() > 0,
+        "expects at least 3 inputs and at least 1 output, got {}in/{}out",
+        ninputs,
+        node.num_outputs()
+    );
 
     // X (rank-3, static positive seq length), W, R — all the same float dtype.
     let (xinfo, winfo, rinfo) = match (node.input_info(0), node.input_info(1), node.input_info(2)) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, W, or R"),
     };
     let xt = xinfo.dtype;
-    if !is_mlx_float(xt) || winfo.dtype != xt || rinfo.dtype != xt {
-        return false;
-    }
-    if xinfo.shape.len() != 3 || xinfo.shape[0] <= 0 {
-        return false; // dynamic / symbolic seq length -> CPU
-    }
+    require!(
+        is_mlx_float(xt) && winfo.dtype == xt && rinfo.dtype == xt,
+        "X, W, and R must share one MLX float dtype, got {}, {}, {}",
+        crate::registry::ort_dtype_name(xt),
+        crate::registry::ort_dtype_name(winfo.dtype),
+        crate::registry::ort_dtype_name(rinfo.dtype)
+    );
+    require!(
+        xinfo.shape.len() == 3 && xinfo.shape[0] > 0,
+        "X must have rank 3 and a static positive sequence length, got shape {:?}",
+        xinfo.shape
+    );
 
     // Optional float inputs must share the float dtype when present.
-    if !float_ok(node, 3, xt) || !float_ok(node, 5, xt) || !float_ok(node, 6, xt) || !float_ok(node, 7, xt) {
-        return false;
+    for i in [3, 5, 6, 7] {
+        require!(
+            float_ok(node, i, xt),
+            "optional input {} must have X dtype {} when present",
+            i,
+            crate::registry::ort_dtype_name(xt)
+        );
     }
 
-    // sequence_lens (index 4) present => variable-length masking; leave to CPU.
-    if node.input_present(4) {
-        return false;
-    }
+    require!(!node.input_present(4), "sequence_lens is unsupported");
+    require!(
+        node.int_attr("layout", 0) == 0,
+        "only layout=0 is supported"
+    );
+    require!(
+        node.has_attr("hidden_size"),
+        "missing required hidden_size attribute"
+    );
 
-    // Default layout only.
-    if node.int_attr("layout", 0) != 0 {
-        return false;
-    }
-
-    // hidden_size is required for the unroll.
-    if !node.has_attr("hidden_size") {
-        return false;
-    }
-
-    // Direction determines num_directions; only forward/reverse/bidirectional are supported.
     let direction = node.string_attr("direction", "forward");
-    if direction != "forward" && direction != "reverse" && direction != "bidirectional" {
-        return false;
-    }
+    require!(
+        direction == "forward" || direction == "reverse" || direction == "bidirectional",
+        "unsupported direction {:?}",
+        direction
+    );
 
-    // Only DEFAULT activations are translatable (the STRINGS attribute is not carried into NodeDesc,
-    // so the handler hard-codes the defaults). ORT surfaces the schema-default activations for these
-    // nodes, so validate the set against the per-op defaults; any non-default set -> ORT CPU.
     if let Some(acts) = node.strings_attr("activations") {
-        if !activations_are_default(op, &acts) {
-            return false;
-        }
+        require!(
+            activations_are_default(op, &acts),
+            "only default {} activations are supported, got {:?}",
+            op,
+            acts
+        );
     }
 
-    true
+    Ok(())
 }
 
-fn rnn_claim(node: &NodeView) -> bool {
+fn rnn_claim(node: &NodeView) -> ClaimResult {
     recurrent_claim(node, "RNN")
 }
-fn gru_claim(node: &NodeView) -> bool {
+fn gru_claim(node: &NodeView) -> ClaimResult {
     recurrent_claim(node, "GRU")
 }
-fn lstm_claim(node: &NodeView) -> bool {
+fn lstm_claim(node: &NodeView) -> ClaimResult {
     recurrent_claim(node, "LSTM")
 }
 
-fn reg(registry: &mut OpRegistry, op_type: &'static str, handler: OpHandler, claim: ClaimPredicate) {
+fn reg(
+    registry: &mut OpRegistry,
+    op_type: &'static str,
+    handler: OpHandler,
+    claim: ClaimPredicate,
+) {
     registry.register(OpRegistration {
         domain: "",
         op_type,

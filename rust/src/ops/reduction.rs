@@ -9,10 +9,11 @@
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::registry::{
-    is_mlx_float, is_mlx_numeric, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+    is_mlx_float, is_mlx_numeric, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -121,7 +122,11 @@ fn apply_reduction(
 ) -> Result<mlx::mlx_array, MlxError> {
     if matches!(kind, Kind::Max | Kind::Min | Kind::LogSumExp) && ctx.size_of(x) == 0 {
         let ident = f32::NEG_INFINITY; // Max/LogSumExp identity; Min uses +inf below
-        let ident = if kind == Kind::Min { f32::INFINITY } else { ident };
+        let ident = if kind == Kind::Min {
+            f32::INFINITY
+        } else {
+            ident
+        };
         return empty_reduce(ctx, x, axes, reduce_all, keepdims, ident);
     }
     if reduce_all {
@@ -131,7 +136,9 @@ fn apply_reduction(
             Kind::Mean => ctx.emit(|res, s| unsafe { mlx::mlx_mean(res, x, keepdims, s) }),
             Kind::Min => ctx.emit(|res, s| unsafe { mlx::mlx_min(res, x, keepdims, s) }),
             Kind::Prod => ctx.emit(|res, s| unsafe { mlx::mlx_prod(res, x, keepdims, s) }),
-            Kind::LogSumExp => ctx.emit(|res, s| unsafe { mlx::mlx_logsumexp(res, x, keepdims, s) }),
+            Kind::LogSumExp => {
+                ctx.emit(|res, s| unsafe { mlx::mlx_logsumexp(res, x, keepdims, s) })
+            }
         }
     } else {
         let n = axes.len();
@@ -171,13 +178,14 @@ fn reduce(
     let raw_axes = read_axes(ctx, n)?;
     let noop = n.ints.get("noop_with_empty_axes").copied().unwrap_or(0) != 0;
 
-    let apply_post = |ctx: &mut TranslationContext, v: mlx::mlx_array| -> Result<mlx::mlx_array, MlxError> {
-        match post {
-            PostOp::None => Ok(v),
-            PostOp::Log => ctx.emit(|res, s| unsafe { mlx::mlx_log(res, v, s) }),
-            PostOp::Sqrt => ctx.emit(|res, s| unsafe { mlx::mlx_sqrt(res, v, s) }),
-        }
-    };
+    let apply_post =
+        |ctx: &mut TranslationContext, v: mlx::mlx_array| -> Result<mlx::mlx_array, MlxError> {
+            match post {
+                PostOp::None => Ok(v),
+                PostOp::Log => ctx.emit(|res, s| unsafe { mlx::mlx_log(res, v, s) }),
+                PostOp::Sqrt => ctx.emit(|res, s| unsafe { mlx::mlx_sqrt(res, v, s) }),
+            }
+        };
 
     if has_axes && raw_axes.is_empty() && noop {
         let out = apply_post(ctx, body)?;
@@ -215,11 +223,17 @@ reduce_handler!(reduce_sumsquare_op, Kind::Sum, PreOp::Square, PostOp::None);
 reduce_handler!(reduce_l1_op, Kind::Sum, PreOp::Abs, PostOp::None);
 reduce_handler!(reduce_l2_op, Kind::Sum, PreOp::Square, PostOp::Sqrt);
 reduce_handler!(reduce_logsum_op, Kind::Sum, PreOp::None, PostOp::Log);
-reduce_handler!(reduce_logsumexp_op, Kind::LogSumExp, PreOp::None, PostOp::None);
+reduce_handler!(
+    reduce_logsumexp_op,
+    Kind::LogSumExp,
+    PreOp::None,
+    PostOp::None
+);
 
 // ---- ArgMin / ArgMax ---------------------------------------------------------------------------
 
-type ArgOp = unsafe extern "C" fn(*mut mlx::mlx_array, mlx::mlx_array, i32, bool, mlx::mlx_stream) -> i32;
+type ArgOp =
+    unsafe extern "C" fn(*mut mlx::mlx_array, mlx::mlx_array, i32, bool, mlx::mlx_stream) -> i32;
 
 fn argminmax(ctx: &mut TranslationContext, n: &NodeDesc, op: ArgOp) -> Result<(), MlxError> {
     let x = ctx.resolve(&n.inputs[0])?;
@@ -234,7 +248,14 @@ fn argminmax(ctx: &mut TranslationContext, n: &NodeDesc, op: ArgOp) -> Result<()
 
     let arg_input = if select_last {
         let rev = ctx.emit(|res, s| unsafe {
-            mlx::mlx_arange(res, (dim - 1) as f64, -1.0, -1.0, mlx::mlx_dtype__MLX_INT32, s)
+            mlx::mlx_arange(
+                res,
+                (dim - 1) as f64,
+                -1.0,
+                -1.0,
+                mlx::mlx_dtype__MLX_INT32,
+                s,
+            )
         })?;
         ctx.emit(|res, s| unsafe { mlx::mlx_take_axis(res, x, rev, axis, s) })?
     } else {
@@ -261,7 +282,10 @@ fn argmin_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError>
 
 // ---- CumSum ------------------------------------------------------------------------------------
 
-fn read_scalar_int(ctx: &TranslationContext, r: &crate::engine::TensorRef) -> Result<i64, MlxError> {
+fn read_scalar_int(
+    ctx: &TranslationContext,
+    r: &crate::engine::TensorRef,
+) -> Result<i64, MlxError> {
     let h = ctx.raw_host(r)?;
     if h.count != 1 || h.data.is_null() {
         return Err("MLX expected a scalar integer input".to_string());
@@ -319,12 +343,15 @@ fn topk_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     } else {
         x
     };
-    let sorted_indices = ctx.emit(|res, s| unsafe { mlx::mlx_argsort_axis(res, sort_input, axis, s) })?;
-    let selector =
-        ctx.emit(|res, s| unsafe { mlx::mlx_arange(res, 0.0, k as f64, 1.0, mlx::mlx_dtype__MLX_INT32, s) })?;
+    let sorted_indices =
+        ctx.emit(|res, s| unsafe { mlx::mlx_argsort_axis(res, sort_input, axis, s) })?;
+    let selector = ctx.emit(|res, s| unsafe {
+        mlx::mlx_arange(res, 0.0, k as f64, 1.0, mlx::mlx_dtype__MLX_INT32, s)
+    })?;
     let top_indices =
         ctx.emit(|res, s| unsafe { mlx::mlx_take_axis(res, sorted_indices, selector, axis, s) })?;
-    let values = ctx.emit(|res, s| unsafe { mlx::mlx_take_along_axis(res, x, top_indices, axis, s) })?;
+    let values =
+        ctx.emit(|res, s| unsafe { mlx::mlx_take_along_axis(res, x, top_indices, axis, s) })?;
     let cvalues = ctx.contiguous(values)?;
     let cindices = ctx.contiguous(top_indices)?;
     ctx.bind(&n.outputs[0], cvalues);
@@ -347,109 +374,186 @@ fn axes_are_valid(axes: &[i64], rank: i64) -> bool {
     true
 }
 
-fn reduction_claim(node: &NodeView, float_only: bool) -> bool {
+fn reduction_claim(node: &NodeView, float_only: bool) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin == 0 || nin > 2 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        (1..=2).contains(&nin) && node.num_outputs() == 1,
+        "expects 1-2 inputs and 1 output, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if x.shape.is_empty() || x.dtype != out.dtype {
-        return false;
-    }
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
+    require!(
+        x.dtype == out.dtype,
+        "input/output dtypes must match, got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     if float_only {
-        if !is_mlx_float(x.dtype) {
-            return false;
-        }
-    } else if !is_mlx_numeric(x.dtype) {
-        return false;
+        require!(
+            is_mlx_float(x.dtype),
+            "dtype must be float32, float16, or bfloat16, got {}",
+            crate::registry::ort_dtype_name(x.dtype)
+        );
+    } else {
+        require!(
+            is_mlx_numeric(x.dtype),
+            "dtype must be an MLX-supported numeric type, got {}",
+            crate::registry::ort_dtype_name(x.dtype)
+        );
     }
     if nin == 2 && node.input_present(1) {
-        match node.input_info(1) {
-            Some(a)
-                if a.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-                    && a.shape.len() <= 1 => {}
-            _ => return false,
-        }
+        let axes = match node.input_info(1) {
+            Some(axes) => axes,
+            None => deny!("missing tensor type/shape info on axes input"),
+        };
+        require!(
+            axes.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+            "axes input must be int64, got {}",
+            crate::registry::ort_dtype_name(axes.dtype)
+        );
+        require!(
+            axes.shape.len() <= 1,
+            "axes input must be a scalar or 1-D tensor, got rank {}",
+            axes.shape.len()
+        );
     }
     let (present, axes) = node.ints_attr("axes");
-    if present && !axes_are_valid(&axes, x.shape.len() as i64) {
-        return false;
-    }
+    require!(
+        !present || axes_are_valid(&axes, x.shape.len() as i64),
+        "axes attribute {:?} contains an out-of-range or duplicate axis for rank {}",
+        axes,
+        x.shape.len()
+    );
     let keepdims = node.int_attr("keepdims", 1);
     let noop = node.int_attr("noop_with_empty_axes", 0);
-    (keepdims == 0 || keepdims == 1) && (noop == 0 || noop == 1)
+    require!(
+        keepdims == 0 || keepdims == 1,
+        "keepdims must be 0 or 1 (got {keepdims})"
+    );
+    require!(
+        noop == 0 || noop == 1,
+        "noop_with_empty_axes must be 0 or 1 (got {noop})"
+    );
+    Ok(())
 }
 
-fn reduce_numeric_claim(node: &NodeView) -> bool {
+fn reduce_numeric_claim(node: &NodeView) -> ClaimResult {
     reduction_claim(node, false)
 }
 
-fn reduce_float_claim(node: &NodeView) -> bool {
+fn reduce_float_claim(node: &NodeView) -> ClaimResult {
     reduction_claim(node, true)
 }
 
-fn argminmax_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn argminmax_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (i, o) = match (node.input_info(0), node.output_info(0)) {
         (Some(i), Some(o)) => (i, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if i.shape.is_empty()
-        || !is_mlx_numeric(i.dtype)
-        || i.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64
-        || o.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    {
-        return false;
-    }
+    require!(
+        !i.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
+    require!(
+        is_mlx_numeric(i.dtype)
+            && i.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64,
+        "input dtype {} is unsupported (must be MLX numeric, excluding uint64)",
+        crate::registry::ort_dtype_name(i.dtype)
+    );
+    require!(
+        o.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        "output dtype must be int64, got {}",
+        crate::registry::ort_dtype_name(o.dtype)
+    );
     let mut axis = node.int_attr("axis", 0);
+    let raw_axis = axis;
     if axis < 0 {
         axis += i.shape.len() as i64;
     }
     let keepdims = node.int_attr("keepdims", 1);
     let select_last = node.int_attr("select_last_index", 0);
-    axis >= 0
-        && axis < i.shape.len() as i64
-        && (keepdims == 0 || keepdims == 1)
-        && (select_last == 0 || select_last == 1)
+    require!(
+        axis >= 0 && axis < i.shape.len() as i64,
+        "axis {raw_axis} is out of range for rank {}",
+        i.shape.len()
+    );
+    require!(
+        keepdims == 0 || keepdims == 1,
+        "keepdims must be 0 or 1 (got {keepdims})"
+    );
+    require!(
+        select_last == 0 || select_last == 1,
+        "select_last_index must be 0 or 1 (got {select_last})"
+    );
+    Ok(())
 }
 
-fn cumsum_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
-    let (x, axis, out) = match (
-        node.input_info(0),
-        node.input_info(1),
-        node.output_info(0),
-    ) {
+fn cumsum_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (x, axis, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(a), Some(o)) => (x, a, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input, axis, or output"),
     };
-    if x.shape.is_empty() || x.dtype != out.dtype || !is_mlx_numeric(x.dtype) {
-        return false;
-    }
-    if axis.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
-        && axis.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    {
-        return false;
-    }
-    if !(axis.shape.is_empty() || (axis.shape.len() == 1 && axis.shape[0] == 1)) {
-        return false;
-    }
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
+    require!(
+        x.dtype == out.dtype && is_mlx_numeric(x.dtype),
+        "input/output must share an MLX numeric dtype, got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        axis.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+            || axis.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        "axis input must be int32 or int64, got {}",
+        crate::registry::ort_dtype_name(axis.dtype)
+    );
+    require!(
+        axis.shape.is_empty() || (axis.shape.len() == 1 && axis.shape[0] == 1),
+        "axis input must be scalar or shape [1], got {:?}",
+        axis.shape
+    );
     let exclusive = node.int_attr("exclusive", 0);
     let reverse = node.int_attr("reverse", 0);
-    (exclusive == 0 || exclusive == 1) && (reverse == 0 || reverse == 1)
+    require!(
+        exclusive == 0 || exclusive == 1,
+        "exclusive must be 0 or 1 (got {exclusive})"
+    );
+    require!(
+        reverse == 0 || reverse == 1,
+        "reverse must be 0 or 1 (got {reverse})"
+    );
+    Ok(())
 }
 
-fn topk_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 2 {
-        return false;
-    }
+fn topk_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 2,
+        "expects 2 inputs and 2 outputs, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, k, values, indices) = match (
         node.input_info(0),
         node.input_info(1),
@@ -457,27 +561,54 @@ fn topk_claim(node: &NodeView) -> bool {
         node.output_info(1),
     ) {
         (Some(x), Some(k), Some(v), Some(i)) => (x, k, v, i),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, K, values, or indices"),
     };
-    if x.shape.is_empty()
-        || !is_mlx_float(x.dtype)
-        || values.dtype != x.dtype
-        || k.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-        || indices.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-        || !(k.shape.is_empty() || (k.shape.len() == 1 && k.shape[0] == 1))
-    {
-        return false;
-    }
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
+    require!(
+        is_mlx_float(x.dtype) && values.dtype == x.dtype,
+        "X/values must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(values.dtype)
+    );
+    require!(
+        k.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        "K must be an int64 scalar read at translation time, got {}",
+        crate::registry::ort_dtype_name(k.dtype)
+    );
+    require!(
+        indices.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        "indices output must be int64, got {}",
+        crate::registry::ort_dtype_name(indices.dtype)
+    );
+    require!(
+        k.shape.is_empty() || (k.shape.len() == 1 && k.shape[0] == 1),
+        "K must be a scalar or shape [1], read at translation time and constrained to 1..=axis dimension (got shape {:?})",
+        k.shape
+    );
     let mut axis = node.int_attr("axis", -1);
+    let raw_axis = axis;
     if axis < 0 {
         axis += x.shape.len() as i64;
     }
-    if axis < 0 || axis >= x.shape.len() as i64 {
-        return false;
-    }
+    require!(
+        axis >= 0 && axis < x.shape.len() as i64,
+        "axis {raw_axis} is out of range for rank {}; K is limited to 1..=that axis dimension",
+        x.shape.len()
+    );
     let largest = node.int_attr("largest", 1);
     let sorted = node.int_attr("sorted", 1);
-    (largest == 0 || largest == 1) && sorted == 1
+    require!(
+        largest == 0 || largest == 1,
+        "largest must be 0 or 1 (got {largest})"
+    );
+    require!(
+        sorted == 1,
+        "only sorted=1 is supported (got {sorted}); K is read at translation time and must be within the selected axis"
+    );
+    Ok(())
 }
 
 fn reg(
@@ -498,16 +629,76 @@ fn reg(
 }
 
 pub fn register(registry: &mut OpRegistry) {
-    reg(registry, "ReduceSum", K_ANY_OPSET, reduce_sum_op, reduce_numeric_claim);
-    reg(registry, "ReduceMax", K_ANY_OPSET, reduce_max_op, reduce_numeric_claim);
-    reg(registry, "ReduceMean", K_ANY_OPSET, reduce_mean_op, reduce_float_claim);
-    reg(registry, "ReduceMin", K_ANY_OPSET, reduce_min_op, reduce_numeric_claim);
-    reg(registry, "ReduceProd", K_ANY_OPSET, reduce_prod_op, reduce_numeric_claim);
-    reg(registry, "ReduceSumSquare", K_ANY_OPSET, reduce_sumsquare_op, reduce_numeric_claim);
-    reg(registry, "ReduceL1", K_ANY_OPSET, reduce_l1_op, reduce_numeric_claim);
-    reg(registry, "ReduceL2", K_ANY_OPSET, reduce_l2_op, reduce_float_claim);
-    reg(registry, "ReduceLogSum", K_ANY_OPSET, reduce_logsum_op, reduce_float_claim);
-    reg(registry, "ReduceLogSumExp", K_ANY_OPSET, reduce_logsumexp_op, reduce_float_claim);
+    reg(
+        registry,
+        "ReduceSum",
+        K_ANY_OPSET,
+        reduce_sum_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceMax",
+        K_ANY_OPSET,
+        reduce_max_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceMean",
+        K_ANY_OPSET,
+        reduce_mean_op,
+        reduce_float_claim,
+    );
+    reg(
+        registry,
+        "ReduceMin",
+        K_ANY_OPSET,
+        reduce_min_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceProd",
+        K_ANY_OPSET,
+        reduce_prod_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceSumSquare",
+        K_ANY_OPSET,
+        reduce_sumsquare_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceL1",
+        K_ANY_OPSET,
+        reduce_l1_op,
+        reduce_numeric_claim,
+    );
+    reg(
+        registry,
+        "ReduceL2",
+        K_ANY_OPSET,
+        reduce_l2_op,
+        reduce_float_claim,
+    );
+    reg(
+        registry,
+        "ReduceLogSum",
+        K_ANY_OPSET,
+        reduce_logsum_op,
+        reduce_float_claim,
+    );
+    reg(
+        registry,
+        "ReduceLogSumExp",
+        K_ANY_OPSET,
+        reduce_logsumexp_op,
+        reduce_float_claim,
+    );
     reg(registry, "ArgMax", K_ANY_OPSET, argmax_op, argminmax_claim);
     reg(registry, "ArgMin", K_ANY_OPSET, argmin_op, argminmax_claim);
     reg(registry, "CumSum", 11, cumsum_op, cumsum_claim);

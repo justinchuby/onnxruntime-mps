@@ -21,9 +21,12 @@ use std::os::raw::c_char;
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::mlx::VectorArray;
-use crate::registry::{is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
+use crate::registry::{
+    is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+};
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- small local MLX helpers -------------------------------------------------------------------
 
@@ -34,18 +37,35 @@ fn empty_array() -> mlx::mlx_array {
     }
 }
 
-fn mul(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn mul(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_multiply, a, b)
 }
-fn add(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn add(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_add, a, b)
 }
-fn sub(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn sub(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_subtract, a, b)
 }
 
 /// A row-major slice [start, stop) with unit stride over all axes.
-fn slice(ctx: &mut TranslationContext, a: mlx::mlx_array, start: &[i32], stop: &[i32]) -> Result<mlx::mlx_array, MlxError> {
+fn slice(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    start: &[i32],
+    stop: &[i32],
+) -> Result<mlx::mlx_array, MlxError> {
     let stride = vec![1i32; start.len()];
     ctx.emit(|res, s| unsafe {
         mlx::mlx_slice(
@@ -63,7 +83,12 @@ fn slice(ctx: &mut TranslationContext, a: mlx::mlx_array, start: &[i32], stop: &
 }
 
 /// Concatenate two arrays along `axis`.
-fn concat2(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn concat2(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let mut vec = VectorArray::new();
     vec.append(a);
     vec.append(b);
@@ -84,7 +109,17 @@ fn sdpa(
     let mode = mask_mode.as_ptr() as *const c_char;
     ctx.mark_fast("mlx_fast_scaled_dot_product_attention");
     ctx.emit(|res, s| unsafe {
-        mlx::mlx_fast_scaled_dot_product_attention(res, q, k, v, scale, mode, mask, empty_array(), s)
+        mlx::mlx_fast_scaled_dot_product_attention(
+            res,
+            q,
+            k,
+            v,
+            scale,
+            mode,
+            mask,
+            empty_array(),
+            s,
+        )
     })
 }
 
@@ -141,7 +176,14 @@ fn causal_mask_topleft(
 }
 
 /// [B,S,H*hd] -> [B,H,S,hd] (head-major split then transpose).
-fn split_heads(ctx: &mut TranslationContext, x: mlx::mlx_array, b: i32, s: i32, h: i32, hd: i32) -> Result<mlx::mlx_array, MlxError> {
+fn split_heads(
+    ctx: &mut TranslationContext,
+    x: mlx::mlx_array,
+    b: i32,
+    s: i32,
+    h: i32,
+    hd: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let r = ctx.reshape(x, &[b, s, h, hd])?;
     ctx.transpose(r, &[0, 2, 1, 3])
 }
@@ -209,7 +251,17 @@ fn fast_rope_static(
 ) -> Result<mlx::mlx_array, MlxError> {
     ctx.mark_fast("mlx_fast_rope");
     ctx.emit(|res, s| unsafe {
-        mlx::mlx_fast_rope(res, x4, rot, traditional, opt_float_none(), 1.0, offset, freqs, s)
+        mlx::mlx_fast_rope(
+            res,
+            x4,
+            rot,
+            traditional,
+            opt_float_none(),
+            1.0,
+            offset,
+            freqs,
+            s,
+        )
     })
 }
 
@@ -225,7 +277,17 @@ fn fast_rope_dynamic(
 ) -> Result<mlx::mlx_array, MlxError> {
     ctx.mark_fast("mlx_fast_rope");
     ctx.emit(|res, s| unsafe {
-        mlx::mlx_fast_rope_dynamic(res, x4, rot, traditional, opt_float_none(), 1.0, offset, freqs, s)
+        mlx::mlx_fast_rope_dynamic(
+            res,
+            x4,
+            rot,
+            traditional,
+            opt_float_none(),
+            1.0,
+            offset,
+            freqs,
+            s,
+        )
     })
 }
 
@@ -290,7 +352,13 @@ fn gqa_rope(
 }
 
 /// Slice the cos/sin cache rows for positions [past, past+S) -> [S, half] (eager static slice).
-fn cos_sin_row(ctx: &mut TranslationContext, cache: mlx::mlx_array, past: i32, seq: i32, half: i32) -> Result<mlx::mlx_array, MlxError> {
+fn cos_sin_row(
+    ctx: &mut TranslationContext,
+    cache: mlx::mlx_array,
+    past: i32,
+    seq: i32,
+    half: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     slice(ctx, cache, &[past, 0], &[past + seq, half])
 }
 
@@ -488,34 +556,35 @@ fn group_query_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Resul
     //     additive mask over the whole cap buffer (the tail beyond valid_past+S masked to -inf).
     //     Keeping every op statically shaped lets the shapeless compiled closure express it.
     //   * Growing: concat past+new along the sequence axis (unchanged legacy behavior).
-    let (present_k, present_v, attn) = if shared_buffer && ctx.rope_dynamic() && ctx.compiled_shape_keyed() {
-        let start = [0, 0, valid_past, 0];
-        let stop = [b, kv_heads, valid_past + s, head];
-        let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
-        let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
-        let vp1 = valid_past + s;
-        let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
-        let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
-        let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
-        (pk, pv, attn)
-    } else if shared_buffer && ctx.rope_dynamic() {
-        gqa_shared_compiled(ctx, n, past_k, past_v, kh, vh, qh, s, cap, scale)?
-    } else if shared_buffer {
-        let start = [0, 0, valid_past, 0];
-        let stop = [b, kv_heads, valid_past + s, head];
-        let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
-        let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
-        let vp1 = valid_past + s;
-        let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
-        let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
-        let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
-        (pk, pv, attn)
-    } else {
-        let pk = concat2(ctx, past_k, kh, 2)?;
-        let pv = concat2(ctx, past_v, vh, 2)?;
-        let attn = sdpa(ctx, qh, pk, pv, scale, b"causal\0", empty_array())?;
-        (pk, pv, attn)
-    };
+    let (present_k, present_v, attn) =
+        if shared_buffer && ctx.rope_dynamic() && ctx.compiled_shape_keyed() {
+            let start = [0, 0, valid_past, 0];
+            let stop = [b, kv_heads, valid_past + s, head];
+            let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
+            let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
+            let vp1 = valid_past + s;
+            let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+            let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+            let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
+            (pk, pv, attn)
+        } else if shared_buffer && ctx.rope_dynamic() {
+            gqa_shared_compiled(ctx, n, past_k, past_v, kh, vh, qh, s, cap, scale)?
+        } else if shared_buffer {
+            let start = [0, 0, valid_past, 0];
+            let stop = [b, kv_heads, valid_past + s, head];
+            let pk = ctx.slice_update(past_k, kh, &start, &stop)?;
+            let pv = ctx.slice_update(past_v, vh, &start, &stop)?;
+            let vp1 = valid_past + s;
+            let ak = slice(ctx, pk, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+            let av = slice(ctx, pv, &[0, 0, 0, 0], &[b, kv_heads, vp1, head])?;
+            let attn = sdpa(ctx, qh, ak, av, scale, b"causal\0", empty_array())?;
+            (pk, pv, attn)
+        } else {
+            let pk = concat2(ctx, past_k, kh, 2)?;
+            let pv = concat2(ctx, past_v, vh, 2)?;
+            let attn = sdpa(ctx, qh, pk, pv, scale, b"causal\0", empty_array())?;
+            (pk, pv, attn)
+        };
 
     // [B,H,S,hd] -> [B,S,H*hd].
     let t = ctx.transpose(attn, &[0, 2, 1, 3])?;
@@ -861,52 +930,80 @@ fn is_int32(t: ort::ONNXTensorElementDataType) -> bool {
 
 /// GroupQueryAttention (com.microsoft): 9-input separate-QKV decode/prefill layout. All floating
 /// inputs/outputs one dtype; seqlens_k / total_sequence_length are int32.
-fn group_query_attention_claim(node: &NodeView) -> bool {
-    if node.num_outputs() == 0 {
-        return false;
-    }
+fn group_query_attention_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_outputs() > 0, "requires at least 1 output");
     let out_type = match node.output_info(0) {
         Some(o) if is_mlx_float(o.dtype) => o.dtype,
-        _ => return false,
+        Some(o) => deny!(
+            "output must have an MLX float dtype, got {}",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("output lacks tensor type/shape info"),
     };
-    if node.num_inputs() != 9 {
-        return false; // q,k,v,past_k,past_v,seqlens_k,total_seq,cos,sin
-    }
+    require!(
+        node.num_inputs() == 9,
+        "expects 9 inputs (q, k, v, past_k, past_v, seqlens_k, total_seq, cos, sin), got {}",
+        node.num_inputs()
+    );
     for &idx in &[0usize, 1, 2, 3, 4, 7, 8] {
-        match dtype_of(node, idx) {
-            Some(t) if t == out_type => {}
-            _ => return false,
-        }
+        let dtype = match dtype_of(node, idx) {
+            Some(dtype) => dtype,
+            None => deny!("input {} lacks tensor type/shape info", idx),
+        };
+        require!(
+            dtype == out_type,
+            "input {} must have output dtype {}, got {}",
+            idx,
+            crate::registry::ort_dtype_name(out_type),
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
-    let nouts = node.num_outputs();
-    for idx in 1..nouts.min(3) {
-        match node.output_info(idx) {
-            Some(o) if o.dtype == out_type => {}
-            _ => return false,
-        }
+    for idx in 1..node.num_outputs().min(3) {
+        let dtype = match node.output_info(idx) {
+            Some(o) => o.dtype,
+            None => deny!("output {} lacks tensor type/shape info", idx),
+        };
+        require!(
+            dtype == out_type,
+            "output {} must have dtype {}, got {}",
+            idx,
+            crate::registry::ort_dtype_name(out_type),
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
-    if !matches!(dtype_of(node, 5), Some(t) if is_int32(t)) {
-        return false;
-    }
-    if !matches!(dtype_of(node, 6), Some(t) if is_int32(t)) {
-        return false;
+    for idx in [5, 6] {
+        let dtype = match dtype_of(node, idx) {
+            Some(dtype) => dtype,
+            None => deny!("input {} lacks tensor type/shape info", idx),
+        };
+        require!(
+            is_int32(dtype),
+            "input {} must have int32 dtype, got {}",
+            idx,
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
     let nh = node.int_attr("num_heads", 0);
     let kvh = node.int_attr("kv_num_heads", 0);
-    if nh <= 0 || kvh <= 0 || nh % kvh != 0 {
-        return false;
-    }
-    // Unsupported (rare) variants fall back to CPU. Only a genuine enable (== 1) is rejected.
-    if node.int_attr("smooth_softmax", 0) == 1 {
-        return false;
-    }
-    if node.int_attr("qk_output", 0) != 0 {
-        return false;
-    }
-    if node.float_attr("softcap", 0.0) != 0.0 {
-        return false;
-    }
-    true
+    require!(
+        nh > 0 && kvh > 0 && nh % kvh == 0,
+        "num_heads ({}) must be a positive multiple of kv_num_heads ({})",
+        nh,
+        kvh
+    );
+    require!(
+        node.int_attr("smooth_softmax", 0) != 1,
+        "smooth_softmax=1 is unsupported"
+    );
+    require!(
+        node.int_attr("qk_output", 0) == 0,
+        "qk_output is unsupported"
+    );
+    require!(
+        node.float_attr("softcap", 0.0) == 0.0,
+        "softcap is unsupported"
+    );
+    Ok(())
 }
 
 /// Q/K/V present and same MLX float dtype as the output.
@@ -929,7 +1026,12 @@ fn check_qkv_float(node: &NodeView) -> Option<ort::ONNXTensorElementDataType> {
 }
 
 /// A past/present pair must be used together, share the query dtype; present outputs require past.
-fn check_kv_cache(node: &NodeView, past_k: usize, past_v: usize, qd: ort::ONNXTensorElementDataType) -> bool {
+fn check_kv_cache(
+    node: &NodeView,
+    past_k: usize,
+    past_v: usize,
+    qd: ort::ONNXTensorElementDataType,
+) -> bool {
     let pk = node.input_present(past_k);
     let pv = node.input_present(past_v);
     if pk != pv {
@@ -948,7 +1050,12 @@ fn check_kv_cache(node: &NodeView, past_k: usize, past_v: usize, qd: ort::ONNXTe
 }
 
 /// An attn/attention_bias mask must be bool or the query float dtype, and cannot co-exist with causal.
-fn check_mask(node: &NodeView, mask_idx: usize, causal: bool, _qd: ort::ONNXTensorElementDataType) -> bool {
+fn check_mask(
+    node: &NodeView,
+    mask_idx: usize,
+    causal: bool,
+    _qd: ort::ONNXTensorElementDataType,
+) -> bool {
     if !node.input_present(mask_idx) {
         return true;
     }
@@ -956,220 +1063,262 @@ fn check_mask(node: &NodeView, mask_idx: usize, causal: bool, _qd: ort::ONNXTens
         return false;
     }
     match dtype_of(node, mask_idx) {
-        Some(md) => md == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL || is_mlx_float(md),
+        Some(md) => {
+            md == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
+                || is_mlx_float(md)
+        }
         None => false,
     }
 }
 
 /// Attention (ai.onnx, opset 23 and 24). 3D/4D SDPA, optional attn_mask + past/present KV.
-fn attention_claim(node: &NodeView) -> bool {
+fn attention_claim(node: &NodeView) -> ClaimResult {
     let qd = match check_qkv_float(node) {
         Some(qd) => qd,
-        None => return false,
+        None => deny!("Q, K, V, and output 0 must be present and share one MLX float dtype"),
     };
     let qshape = match node.input_info(0) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("Q lacks tensor type/shape info"),
     };
     let kshape = match node.input_info(1) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("K lacks tensor type/shape info"),
     };
     let vshape = match node.input_info(2) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("V lacks tensor type/shape info"),
     };
     let rank = qshape.len();
-    if rank != 3 && rank != 4 {
-        return false;
-    }
-    if kshape.len() != qshape.len() || vshape.len() != qshape.len() {
-        return false;
-    }
+    require!(
+        rank == 3 || rank == 4,
+        "Q must have rank 3 or 4, got rank {}",
+        rank
+    );
+    require!(
+        kshape.len() == rank && vshape.len() == rank,
+        "Q, K, and V must have equal rank, got {}, {}, {}",
+        rank,
+        kshape.len(),
+        vshape.len()
+    );
 
     let (qh, kvh) = if rank == 3 {
         let qh = node.int_attr("q_num_heads", 0);
         let kvh = node.int_attr("kv_num_heads", 0);
-        if qh <= 0 || kvh <= 0 {
-            return false;
-        }
-        for &d in &qshape {
-            if d <= 0 {
-                return false;
-            }
-        }
-        if kshape[1] <= 0 || vshape[1] <= 0 || kshape[2] <= 0 || vshape[2] <= 0 {
-            return false;
-        }
-        if qshape[2] % qh != 0 || kshape[2] % kvh != 0 || vshape[2] % kvh != 0 {
-            return false;
-        }
+        require!(
+            qh > 0 && kvh > 0,
+            "q_num_heads and kv_num_heads must be positive, got {} and {}",
+            qh,
+            kvh
+        );
+        require!(
+            qshape.iter().all(|&d| d > 0),
+            "Q must have static positive dimensions, got shape {:?}",
+            qshape
+        );
+        require!(
+            kshape[1] > 0 && vshape[1] > 0 && kshape[2] > 0 && vshape[2] > 0,
+            "K and V must have static positive sequence and hidden dimensions, got {:?} and {:?}",
+            kshape,
+            vshape
+        );
+        require!(
+            qshape[2] % qh == 0 && kshape[2] % kvh == 0 && vshape[2] % kvh == 0,
+            "hidden dimensions Q/K/V ({}/{}/{}) must divide evenly by head counts {}/{}",
+            qshape[2],
+            kshape[2],
+            vshape[2],
+            qh,
+            kvh
+        );
         (qh, kvh)
     } else {
         let qh = qshape[1];
         let kvh = kshape[1];
-        if qh <= 0 || kvh <= 0 {
-            return false;
-        }
+        require!(
+            qh > 0 && kvh > 0,
+            "Q and K head dimensions must be positive, got {} and {}",
+            qh,
+            kvh
+        );
         (qh, kvh)
     };
-    if qh % kvh != 0 {
-        return false;
-    }
-
-    if node.float_attr("softcap", 0.0) != 0.0 {
-        return false; // logit soft-cap unsupported
-    }
-    if node.output_present(3) {
-        return false; // qk_matmul_output unsupported
-    }
-    if node.input_present(6) {
-        return false; // nonpad_kv_seqlen (opset 24)
-    }
-
+    require!(
+        qh % kvh == 0,
+        "Q head count {} must be a multiple of KV head count {}",
+        qh,
+        kvh
+    );
+    require!(
+        node.float_attr("softcap", 0.0) == 0.0,
+        "logit soft-cap is unsupported"
+    );
+    require!(!node.output_present(3), "qk_matmul_output is unsupported");
+    require!(!node.input_present(6), "nonpad_kv_seqlen is unsupported");
     let causal = node.int_attr("is_causal", 0) != 0;
-    if !check_mask(node, 3, causal, qd) {
-        return false;
-    }
-    check_kv_cache(node, 4, 5, qd)
+    require!(check_mask(node, 3, causal, qd), "attention mask must be bool or float and cannot be used with is_causal; this guards SDPA mask dispatch");
+    require!(
+        check_kv_cache(node, 4, 5, qd),
+        "past K/V must be paired and match query dtype {}; present K/V require a cache",
+        crate::registry::ort_dtype_name(qd)
+    );
+    Ok(())
 }
 
 /// MultiHeadAttention (com.microsoft). Separate 3D Q/K/V + optional projection bias.
-fn multihead_attention_claim(node: &NodeView) -> bool {
-    if node.int_attr("num_heads", 0) <= 0 {
-        return false;
-    }
+fn multihead_attention_claim(node: &NodeView) -> ClaimResult {
+    let h = node.int_attr("num_heads", 0);
+    require!(h > 0, "num_heads must be positive, got {}", h);
     let qd = match check_qkv_float(node) {
         Some(qd) => qd,
-        None => return false,
+        None => deny!("Q, K, V, and output 0 must be present and share one MLX float dtype"),
     };
-    let h = node.int_attr("num_heads", 0);
     let qshape = match node.input_info(0) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("Q lacks tensor type/shape info"),
     };
     let kshape = match node.input_info(1) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("K lacks tensor type/shape info"),
     };
     let vshape = match node.input_info(2) {
         Some(i) => i.shape,
-        None => return false,
+        None => deny!("V lacks tensor type/shape info"),
     };
-    if qshape.len() != 3 || kshape.len() != 3 || vshape.len() != 3 {
-        return false;
+    require!(
+        qshape.len() == 3 && kshape.len() == 3 && vshape.len() == 3,
+        "Q, K, and V must be rank 3, got ranks {}, {}, {}",
+        qshape.len(),
+        kshape.len(),
+        vshape.len()
+    );
+    for (name, shape) in [("Q", &qshape), ("K", &kshape), ("V", &vshape)] {
+        require!(
+            shape.iter().all(|&d| d > 0),
+            "{} must have static positive dimensions, got shape {:?}",
+            name,
+            shape
+        );
     }
-    for sh in [&qshape, &kshape, &vshape] {
-        for &d in sh.iter() {
-            if d <= 0 {
-                return false;
-            }
-        }
-    }
-    if qshape[2] % h != 0 || kshape[2] % h != 0 || vshape[2] % h != 0 {
-        return false;
-    }
-
+    require!(
+        qshape[2] % h == 0 && kshape[2] % h == 0 && vshape[2] % h == 0,
+        "Q/K/V hidden dimensions ({}/{}/{}) must divide evenly by num_heads {}",
+        qshape[2],
+        kshape[2],
+        vshape[2],
+        h
+    );
     if node.input_present(3) {
-        // bias: 1D [Dq+Dk+Dv]
         let (bd, bshape) = match node.input_info(3) {
             Some(i) => (i.dtype, i.shape),
-            None => return false,
+            None => deny!("projection bias lacks tensor type/shape info"),
         };
-        if bd != qd || bshape.len() != 1 || bshape[0] != qshape[2] + kshape[2] + vshape[2] {
-            return false;
-        }
+        require!(
+            bd == qd && bshape.len() == 1 && bshape[0] == qshape[2] + kshape[2] + vshape[2],
+            "projection bias must be a 1D {} tensor of length {}, got {} shape {:?}",
+            crate::registry::ort_dtype_name(qd),
+            qshape[2] + kshape[2] + vshape[2],
+            crate::registry::ort_dtype_name(bd),
+            bshape
+        );
     }
-    // key_padding_mask (#4), attention_bias (#5), past/present KV (#6/#7), past_seq_len (#8),
-    // cache_indirection (#9) -> CPU.
     for i in 4..=9 {
-        if node.input_present(i) {
-            return false;
-        }
+        require!(
+            !node.input_present(i),
+            "optional input {} is unsupported",
+            i
+        );
     }
-    if node.output_present(1) || node.output_present(2) || node.output_present(3) {
-        return false;
-    }
-    true
+    require!(
+        !node.output_present(1) && !node.output_present(2) && !node.output_present(3),
+        "cache and qk_matmul outputs are unsupported"
+    );
+    Ok(())
 }
 
 /// RotaryEmbedding (ai.onnx opset 23 / com.microsoft). Float 3D (B,S,H*hd)+num_heads or 4D input;
 /// [B,S] gather, [1] offset (com.microsoft), or (ai.onnx only) absent pos with [B,S,half] cache.
-fn rotary_embedding_claim(node: &NodeView) -> bool {
-    if node.num_outputs() == 0 {
-        return false;
-    }
+fn rotary_embedding_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_outputs() > 0, "requires at least 1 output");
     let ms = node.domain() == "com.microsoft";
     let ci = if ms { 2 } else { 1 };
     let si = if ms { 3 } else { 2 };
     let pi = if ms { 1 } else { 3 };
     let min_inputs = if ms { 4 } else { 3 };
-    if node.num_inputs() < min_inputs {
-        return false;
-    }
-
+    require!(
+        node.num_inputs() >= min_inputs,
+        "expects at least {} inputs, got {}",
+        min_inputs,
+        node.num_inputs()
+    );
     let (xd, xshape) = match node.input_info(0) {
         Some(i) => (i.dtype, i.shape),
-        None => return false,
+        None => deny!("input lacks tensor type/shape info"),
     };
     let (cd, cshape) = match node.input_info(ci) {
         Some(i) => (i.dtype, i.shape),
-        None => return false,
+        None => deny!("cos cache lacks tensor type/shape info"),
     };
-    if !node.input_present(si) {
-        return false;
-    }
+    require!(node.input_present(si), "sin cache input is required");
     let sd = match dtype_of(node, si) {
         Some(t) => t,
-        None => return false,
+        None => deny!("sin cache lacks tensor type/shape info"),
     };
     let od = match node.output_info(0) {
         Some(o) => o.dtype,
-        None => return false,
+        None => deny!("output lacks tensor type/shape info"),
     };
-    if !is_mlx_float(xd) || cd != xd || sd != xd || od != xd {
-        return false;
-    }
-
+    require!(is_mlx_float(xd) && cd == xd && sd == xd && od == xd, "input, cos cache, sin cache, and output must share one MLX float dtype, got {}, {}, {}, {}", crate::registry::ort_dtype_name(xd), crate::registry::ort_dtype_name(cd), crate::registry::ort_dtype_name(sd), crate::registry::ort_dtype_name(od));
     let rank = xshape.len();
     if rank == 3 {
         let nh = node.int_attr("num_heads", 0);
-        if nh <= 0 || xshape[2] <= 0 || xshape[2] % nh != 0 {
-            return false;
-        }
-    } else if rank != 4 {
-        return false;
+        require!(
+            nh > 0 && xshape[2] > 0 && xshape[2] % nh == 0,
+            "rank-3 input hidden dimension {} must divide evenly by positive num_heads {}",
+            xshape[2],
+            nh
+        );
+    } else {
+        require!(rank == 4, "input must have rank 3 or 4, got rank {}", rank);
     }
-
     let has_pos = node.input_present(pi);
-    if ms && !has_pos {
-        return false; // com.microsoft position_ids is mandatory
-    }
+    require!(
+        !ms || has_pos,
+        "com.microsoft RotaryEmbedding requires position_ids"
+    );
     if has_pos {
         let (pd, pshape) = match node.input_info(pi) {
             Some(i) => (i.dtype, i.shape),
-            None => return false,
+            None => deny!("position_ids lacks tensor type/shape info"),
         };
-        if pd != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-            && pd != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
-        {
-            return false;
-        }
-        let gather = pshape.len() == 2; // position_ids [B,S] (either domain)
-        let offset = ms && pshape.len() == 1 && pshape[0] == 1; // position_ids [1] (com.microsoft)
-        if !gather && !offset {
-            return false;
-        }
-        if cshape.len() != 2 {
-            return false; // gather/offset caches are [max_seq, half]
-        }
-    } else if cshape.len() != 3 {
-        return false; // absent form: cache must be per-position [B,S,half]
+        require!(
+            pd == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+                || pd == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32,
+            "position_ids must have int32 or int64 dtype, got {}",
+            crate::registry::ort_dtype_name(pd)
+        );
+        let gather = pshape.len() == 2;
+        let offset = ms && pshape.len() == 1 && pshape[0] == 1;
+        require!(
+            gather || offset,
+            "position_ids must be [B,S] or, for com.microsoft, [1], got shape {:?}",
+            pshape
+        );
+        require!(
+            cshape.len() == 2,
+            "gather/offset cos cache must have rank 2, got shape {:?}",
+            cshape
+        );
+    } else {
+        require!(
+            cshape.len() == 3,
+            "absent-position cos cache must have rank 3, got shape {:?}",
+            cshape
+        );
     }
-    true
+    Ok(())
 }
-
-// ---- registration ------------------------------------------------------------------------------
 
 fn reg(
     registry: &mut OpRegistry,
@@ -1191,12 +1340,60 @@ fn reg(
 }
 
 pub fn register_attention(registry: &mut OpRegistry) {
-    reg(registry, "com.microsoft", "GroupQueryAttention", K_ANY_OPSET, K_ANY_OPSET, group_query_attention_op, group_query_attention_claim);
+    reg(
+        registry,
+        "com.microsoft",
+        "GroupQueryAttention",
+        K_ANY_OPSET,
+        K_ANY_OPSET,
+        group_query_attention_op,
+        group_query_attention_claim,
+    );
     // Attention entered ai.onnx at opset 23; opset 24 adds the trailing nonpad_kv_seqlen input.
-    reg(registry, "", "Attention", 23, 23, attention_op, attention_claim);
-    reg(registry, "", "Attention", 24, K_ANY_OPSET, attention_op, attention_claim);
-    reg(registry, "com.microsoft", "MultiHeadAttention", K_ANY_OPSET, K_ANY_OPSET, multihead_attention_op, multihead_attention_claim);
+    reg(
+        registry,
+        "",
+        "Attention",
+        23,
+        23,
+        attention_op,
+        attention_claim,
+    );
+    reg(
+        registry,
+        "",
+        "Attention",
+        24,
+        K_ANY_OPSET,
+        attention_op,
+        attention_claim,
+    );
+    reg(
+        registry,
+        "com.microsoft",
+        "MultiHeadAttention",
+        K_ANY_OPSET,
+        K_ANY_OPSET,
+        multihead_attention_op,
+        multihead_attention_claim,
+    );
     // RotaryEmbedding: ai.onnx entered at opset 23; com.microsoft is version-insensitive.
-    reg(registry, "", "RotaryEmbedding", 23, K_ANY_OPSET, rotary_embedding_op, rotary_embedding_claim);
-    reg(registry, "com.microsoft", "RotaryEmbedding", K_ANY_OPSET, K_ANY_OPSET, rotary_embedding_op, rotary_embedding_claim);
+    reg(
+        registry,
+        "",
+        "RotaryEmbedding",
+        23,
+        K_ANY_OPSET,
+        rotary_embedding_op,
+        rotary_embedding_claim,
+    );
+    reg(
+        registry,
+        "com.microsoft",
+        "RotaryEmbedding",
+        K_ANY_OPSET,
+        K_ANY_OPSET,
+        rotary_embedding_op,
+        rotary_embedding_claim,
+    );
 }

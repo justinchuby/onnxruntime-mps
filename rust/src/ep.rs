@@ -188,7 +188,16 @@ unsafe fn get_capability_impl(
                     let e = acc.entry(view.op_type()).or_insert((0, String::new(), Vec::new()));
                     e.0 += 1;
                     if e.1.is_empty() {
-                        e.1 = crate::registry::decline_reason(&view);
+                        e.1 = if in_cf_body {
+                            "inside a control-flow subgraph body — claimed as part of the parent \
+                             If/Loop/Scan, not individually"
+                                .to_string()
+                        } else {
+                            crate::registry::claim_decision(&view)
+                                .err()
+                                .map(|c| c.into_owned())
+                                .unwrap_or_else(|| "declined (no reason reported)".to_string())
+                        };
                     }
                     if e.2.len() < 16 {
                         let nm = view.name();

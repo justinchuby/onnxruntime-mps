@@ -28,10 +28,11 @@ use std::os::raw::c_void;
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::mlx::{Array, VectorArray};
 use crate::registry::{
-    is_int_index, is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+    is_int_index, is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- small MLX helpers (each keeps + returns the raw result) -------------------------------------
 
@@ -864,126 +865,125 @@ fn static_positive(shape: &[i64]) -> bool {
     !shape.is_empty() && shape.iter().all(|&d| d > 0)
 }
 
-fn matmulnbits_claim(node: &NodeView) -> bool {
+fn matmulnbits_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if node.num_outputs() < 1 {
-        return false;
-    }
+    require!(node.num_outputs() >= 1, "requires at least one output");
     let out = match node.output_info(0) {
         Some(o) => o,
-        None => return false,
+        None => deny!("missing output type/shape info"),
     };
-    if !is_float(out.dtype) {
-        return false;
-    }
+    require!(is_float(out.dtype), "output must be float32");
     let (a, b, s) = match (node.input_info(0), node.input_info(1), node.input_info(2)) {
         (Some(a), Some(b), Some(s)) => (a, b, s),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input"),
     };
-    if !is_float(a.dtype) || !is_uint8(b.dtype) || !is_float(s.dtype) {
-        return false;
-    }
+    require!(is_float(a.dtype) && is_uint8(b.dtype) && is_float(s.dtype),
+        "activation/scales must be float32 and packed weights must be uint8");
     // Only the 3-input symmetric or 4-input asymmetric (uint8 packed int4 zero_points) forms.
     if node.input_present(3) {
         match node.input_info(3) {
             Some(zp) if is_uint8(zp.dtype) => {}
-            _ => return false,
+            _ => deny!("zero_points must be uint8 when present"),
         }
     }
     // Reject g_idx / bias (any present input beyond slot 3) — left to ORT CPU.
     for i in 4..nin {
         if node.input_present(i) {
-            return false;
+            deny!("g_idx and bias inputs are not supported");
         }
     }
     let bits = node.int_attr("bits", 4);
     let block = node.int_attr("block_size", 32);
-    bits == 4 && (block == 16 || block == 32 || block == 64 || block == 128)
+    require!(bits == 4, "only 4-bit weights are supported");
+    require!(matches!(block, 16 | 32 | 64 | 128), "block_size must be 16, 32, 64, or 128 (got {block})");
+    Ok(())
 }
 
-fn gather_block_quantized_claim(node: &NodeView) -> bool {
-    if node.num_outputs() < 1 {
-        return false;
-    }
+fn gather_block_quantized_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_outputs() >= 1, "requires at least one output");
     let out = match node.output_info(0) {
         Some(o) => o,
-        None => return false,
+        None => deny!("missing output type/shape info"),
     };
     let (data, idx, scales) = match (node.input_info(0), node.input_info(1), node.input_info(2)) {
         (Some(d), Some(i), Some(s)) => (d, i, s),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input"),
     };
     if !is_uint8(data.dtype)
         || !is_int_index(idx.dtype)
         || scales.dtype != out.dtype
         || !is_mlx_float(scales.dtype)
     {
-        return false;
+        deny!("data must be uint8, indices int32/int64, and scales/output the same float dtype");
     }
     if node.input_present(3) {
         match node.input_info(3) {
             Some(zp) if is_uint8(zp.dtype) => {}
-            _ => return false,
+            _ => deny!("zero_points must be uint8 when present"),
         }
     }
-    node.int_attr("bits", 4) == 4
-        && node.int_attr("gather_axis", 0) == 0
-        && node.int_attr("quantize_axis", 1) == 1
-        && node.int_attr("block_size", 128) >= 16
+    require!(node.int_attr("bits", 4) == 4, "only 4-bit data is supported");
+    require!(node.int_attr("gather_axis", 0) == 0 && node.int_attr("quantize_axis", 1) == 1,
+        "only gather_axis=0 and quantize_axis=1 are supported");
+    require!(node.int_attr("block_size", 128) >= 16, "block_size must be at least 16");
+    Ok(())
 }
 
-fn quantize_linear_claim(node: &NodeView) -> bool {
+fn quantize_linear_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 2 || nin > 3 || node.num_outputs() < 1 {
-        return false;
-    }
+    require!(nin >= 2 && nin <= 3 && node.num_outputs() >= 1,
+        "expects 2 or 3 inputs and at least one output");
     let (x, s, o) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(s), Some(o)) => (x, s, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_float(x.dtype) || !is_float(s.dtype) {
-        return false;
+        deny!("input and scale dtypes must be float32; got {} and {}",
+            crate::registry::ort_dtype_name(x.dtype), crate::registry::ort_dtype_name(s.dtype));
     }
     if s.shape.len() > 1 || !is_quant_output(o.dtype) {
-        return false;
+        deny!("scale must be scalar or rank-1 and output dtype {} must be int8, uint8, int16, or uint16",
+            crate::registry::ort_dtype_name(o.dtype));
     }
     if node.input_present(2) {
         match node.input_info(2) {
             Some(z) if z.dtype == o.dtype && z.shape.len() <= 1 => {}
-            _ => return false,
+            _ => deny!("zero_point must match output dtype {} and be scalar or rank-1",
+                crate::registry::ort_dtype_name(o.dtype)),
         }
     }
-    true
+    Ok(())
 }
 
-fn dequantize_linear_claim(node: &NodeView) -> bool {
+fn dequantize_linear_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 2 || nin > 3 || node.num_outputs() < 1 {
-        return false;
-    }
+    require!(nin >= 2 && nin <= 3 && node.num_outputs() >= 1,
+        "expects 2 or 3 inputs and at least one output");
     let (x, s, o) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(s), Some(o)) => (x, s, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_dequant_input(x.dtype) || !is_float(s.dtype) || !is_float(o.dtype) {
-        return false;
+        deny!("input dtype {} must be int8, uint8, int16, uint16, or int32; scale/output must be float32 (got {} -> {})",
+            crate::registry::ort_dtype_name(x.dtype), crate::registry::ort_dtype_name(s.dtype),
+            crate::registry::ort_dtype_name(o.dtype));
     }
     if s.shape.len() > 1 {
-        return false;
+        deny!("scale must be scalar or rank-1");
     }
     if node.input_present(2) {
         match node.input_info(2) {
             Some(z) if z.dtype == x.dtype && z.shape.len() <= 1 => {}
-            _ => return false,
+            _ => deny!("zero_point must match input dtype {} and be scalar or rank-1",
+                crate::registry::ort_dtype_name(x.dtype)),
         }
     }
-    true
+    Ok(())
 }
 
-fn dynamic_quantize_linear_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 3 {
-        return false;
-    }
+fn dynamic_quantize_linear_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 1 && node.num_outputs() == 3,
+        "expects 1 input and 3 outputs, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let (x, y, sc, z) = match (
         node.input_info(0),
         node.output_info(0),
@@ -991,46 +991,51 @@ fn dynamic_quantize_linear_claim(node: &NodeView) -> bool {
         node.output_info(2),
     ) {
         (Some(x), Some(y), Some(sc), Some(z)) => (x, y, sc, z),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or output"),
     };
-    is_float(x.dtype) && is_uint8(y.dtype) && is_float(sc.dtype) && is_uint8(z.dtype)
+    require!(is_float(x.dtype) && is_uint8(y.dtype) && is_float(sc.dtype) && is_uint8(z.dtype),
+        "input and scale must be float32; quantized output and zero point must be uint8");
+    Ok(())
 }
 
-fn matmul_integer_claim(node: &NodeView) -> bool {
+fn matmul_integer_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 2 || nin > 4 || node.num_outputs() < 1 {
-        return false;
-    }
+    require!(nin >= 2 && nin <= 4 && node.num_outputs() >= 1,
+        "expects 2 to 4 inputs and at least one output");
     let (a, b, o) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_int8or(a.dtype)
         || !is_int8or(b.dtype)
         || o.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
     {
-        return false;
+        deny!("input dtypes {} and {} must be int8 or uint8, and output dtype {} must be int32",
+            crate::registry::ort_dtype_name(a.dtype), crate::registry::ort_dtype_name(b.dtype),
+            crate::registry::ort_dtype_name(o.dtype));
     }
     if a.shape.len() != 2 || b.shape.len() != 2 {
-        return false;
+        deny!("inputs must both be rank-2 matrices");
     }
     let k = a.shape[1];
     if k <= 0 || k != b.shape[0] || k > MAX_EXACT_ACCUM {
-        return false;
+        deny!("inner dimensions must match and K must be 1..={MAX_EXACT_ACCUM}");
     }
     if node.input_present(2) {
         match node.input_info(2) {
             Some(z) if z.dtype == a.dtype && z.shape.len() <= 1 => {}
-            _ => return false,
+            _ => deny!("a_zero_point must match A dtype {} and be scalar or rank-1",
+                crate::registry::ort_dtype_name(a.dtype)),
         }
     }
     if node.input_present(3) {
         match node.input_info(3) {
             Some(z) if z.dtype == b.dtype && z.shape.len() <= 1 => {}
-            _ => return false,
+            _ => deny!("b_zero_point must match B dtype {} and be scalar or rank-1",
+                crate::registry::ort_dtype_name(b.dtype)),
         }
     }
-    true
+    Ok(())
 }
 
 fn conv_attrs_ok(node: &NodeView, spatial_rank: usize, w_shape: &[i64], channels: i64, group: i64) -> bool {
@@ -1095,112 +1100,108 @@ fn conv_accum_exact(w_shape: &[i64]) -> bool {
     n_acc >= 1 && n_acc <= MAX_EXACT_ACCUM
 }
 
-fn conv_integer_claim(node: &NodeView) -> bool {
+fn conv_integer_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 2 || nin > 4 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(nin >= 2 && nin <= 4 && node.num_outputs() == 1,
+        "expects 2 to 4 inputs and 1 output");
     let (x, w, o) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(w), Some(o)) => (x, w, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_int8or(x.dtype)
         || !is_int8or(w.dtype)
         || o.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
     {
-        return false;
+        deny!("input dtypes {} and {} must be int8 or uint8, and output dtype {} must be int32",
+            crate::registry::ort_dtype_name(x.dtype), crate::registry::ort_dtype_name(w.dtype),
+            crate::registry::ort_dtype_name(o.dtype));
     }
     if (x.shape.len() != 3 && x.shape.len() != 4) || w.shape.len() != x.shape.len() {
-        return false;
+        deny!("input/weight must have matching rank, with input rank 3 or 4");
     }
     if !static_positive(&x.shape) || !static_positive(&w.shape) {
-        return false;
+        deny!("input and weight shapes must be static and positive");
     }
     let spatial_rank = x.shape.len() - 2;
     let group = node.int_attr("group", 1);
-    if !conv_attrs_ok(node, spatial_rank, &w.shape, x.shape[1], group) || !conv_accum_exact(&w.shape) {
-        return false;
-    }
-    if !param_ok(node, 2, x.dtype, -1) {
-        return false;
-    }
-    if !param_ok(node, 3, w.dtype, w.shape[0]) {
-        return false;
-    }
-    true
+    require!(conv_attrs_ok(node, spatial_rank, &w.shape, x.shape[1], group),
+        "convolution attributes, channels, group, or kernel shape are unsupported");
+    require!(conv_accum_exact(&w.shape), "convolution accumulation size must be 1..={MAX_EXACT_ACCUM}");
+    require!(param_ok(node, 2, x.dtype, -1),
+        "x_zero_point must match input dtype {} and be scalar", crate::registry::ort_dtype_name(x.dtype));
+    require!(param_ok(node, 3, w.dtype, w.shape[0]),
+        "w_zero_point must match weight dtype {} and be scalar or per-output-channel",
+        crate::registry::ort_dtype_name(w.dtype));
+    Ok(())
 }
 
-fn qlinear_matmul_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 8 || node.num_outputs() != 1 {
-        return false;
-    }
+fn qlinear_matmul_claim(node: &NodeView) -> ClaimResult {
+    require!(node.num_inputs() == 8 && node.num_outputs() == 1,
+        "expects 8 inputs and 1 output, got {}in/{}out", node.num_inputs(), node.num_outputs());
     let (a, b, o) = match (node.input_info(0), node.input_info(3), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_int8or(a.dtype) || !is_int8or(b.dtype) || !is_int8or(o.dtype) {
-        return false;
+        deny!("A, B, and output must each be int8 or uint8");
     }
     if a.shape.len() != 2 || b.shape.len() != 2 {
-        return false;
+        deny!("A and B must be rank-2 matrices");
     }
     let (m, k, big_n) = (a.shape[0], a.shape[1], b.shape[1]);
     if k <= 0 || k != b.shape[0] || k > MAX_EXACT_ACCUM || m <= 0 || big_n <= 0 {
-        return false;
+        deny!("matrix dimensions must be positive, inner dimensions match, and K must be 1..={MAX_EXACT_ACCUM}");
     }
     let f = ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
-    param_ok(node, 1, f, m)
-        && param_ok(node, 2, a.dtype, m)
-        && param_ok(node, 4, f, big_n)
-        && param_ok(node, 5, b.dtype, big_n)
-        && param_ok(node, 6, f, big_n)
-        && param_ok(node, 7, o.dtype, big_n)
+    require!(param_ok(node, 1, f, m), "a_scale must be float32 and scalar or length M");
+    require!(param_ok(node, 2, a.dtype, m), "a_zero_point must match A dtype and be scalar or length M");
+    require!(param_ok(node, 4, f, big_n), "b_scale must be float32 and scalar or length N");
+    require!(param_ok(node, 5, b.dtype, big_n), "b_zero_point must match B dtype and be scalar or length N");
+    require!(param_ok(node, 6, f, big_n), "y_scale must be float32 and scalar or length N");
+    require!(param_ok(node, 7, o.dtype, big_n), "y_zero_point must match output dtype and be scalar or length N");
+    Ok(())
 }
 
-fn qlinear_conv_claim(node: &NodeView) -> bool {
+fn qlinear_conv_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 8 || nin > 9 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(nin >= 8 && nin <= 9 && node.num_outputs() == 1,
+        "expects 8 or 9 inputs and 1 output");
     let (x, w, o) = match (node.input_info(0), node.input_info(3), node.output_info(0)) {
         (Some(x), Some(w), Some(o)) => (x, w, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     if !is_int8or(x.dtype) || !is_int8or(w.dtype) || !is_int8or(o.dtype) {
-        return false;
+        deny!("input, weight, and output must each be int8 or uint8");
     }
     if (x.shape.len() != 3 && x.shape.len() != 4) || w.shape.len() != x.shape.len() {
-        return false;
+        deny!("input/weight must have matching rank, with input rank 3 or 4");
     }
     if !static_positive(&x.shape) || !static_positive(&w.shape) {
-        return false;
+        deny!("input and weight shapes must be static and positive");
     }
     let spatial_rank = x.shape.len() - 2;
     let big_m = w.shape[0];
     let group = node.int_attr("group", 1);
-    if !conv_attrs_ok(node, spatial_rank, &w.shape, x.shape[1], group) || !conv_accum_exact(&w.shape) {
-        return false;
-    }
+    require!(conv_attrs_ok(node, spatial_rank, &w.shape, x.shape[1], group),
+        "convolution attributes, channels, group, or kernel shape are unsupported");
+    require!(conv_accum_exact(&w.shape), "convolution accumulation size must be 1..={MAX_EXACT_ACCUM}");
     let f = ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
-    if !param_ok(node, 1, f, -1) || !param_ok(node, 2, x.dtype, -1) {
-        return false;
-    }
-    if !param_ok(node, 4, f, big_m) || !param_ok(node, 5, w.dtype, big_m) {
-        return false;
-    }
-    if !param_ok(node, 6, f, -1) || !param_ok(node, 7, o.dtype, -1) {
-        return false;
-    }
+    require!(param_ok(node, 1, f, -1), "x_scale must be a scalar float32");
+    require!(param_ok(node, 2, x.dtype, -1), "x_zero_point must match input dtype and be scalar");
+    require!(param_ok(node, 4, f, big_m), "w_scale must be float32 and scalar or per-output-channel");
+    require!(param_ok(node, 5, w.dtype, big_m), "w_zero_point must match weight dtype and be scalar or per-output-channel");
+    require!(param_ok(node, 6, f, -1), "y_scale must be a scalar float32");
+    require!(param_ok(node, 7, o.dtype, -1), "y_zero_point must match output dtype and be scalar");
     if node.input_present(8) {
         match node.input_info(8) {
             Some(bi)
                 if bi.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
                     && bi.shape.len() == 1
                     && bi.shape[0] == big_m => {}
-            _ => return false,
+            _ => deny!("bias must be int32 with one element per output channel"),
         }
     }
-    true
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------

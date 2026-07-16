@@ -7,10 +7,12 @@ use std::f64::consts::PI;
 
 use crate::engine::{MlxError, NodeDesc, TensorRef, TranslationContext};
 use crate::registry::{
-    is_mlx_float, ClaimPredicate, OpHandler, OpRegistration, OpRegistry, NodeView, K_ANY_OPSET,
+    is_mlx_float, ClaimPredicate, ClaimResult, NodeView, OpHandler, OpRegistration, OpRegistry,
+    K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 const NORM_BACKWARD: mlx::mlx_fft_norm = mlx::mlx_fft_norm__MLX_FFT_NORM_BACKWARD;
 
@@ -50,7 +52,11 @@ fn present(n: &NodeDesc, i: usize) -> bool {
 }
 
 /// x[..., idx] dropping the trailing components axis (rank shrinks by 1).
-fn take_last_index(ctx: &mut TranslationContext, x: mlx::mlx_array, idx: i32) -> Result<mlx::mlx_array, MlxError> {
+fn take_last_index(
+    ctx: &mut TranslationContext,
+    x: mlx::mlx_array,
+    idx: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let shape = ctx.shape_of(x);
     let rank = shape.len();
     let mut start = vec![0i32; rank];
@@ -64,7 +70,11 @@ fn take_last_index(ctx: &mut TranslationContext, x: mlx::mlx_array, idx: i32) ->
 }
 
 /// Stack real+imag of a complex array into a new trailing axis of size 2 (ONNX (real, imag) form).
-fn stack_real_imag(ctx: &mut TranslationContext, cx: mlx::mlx_array, append_axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn stack_real_imag(
+    ctx: &mut TranslationContext,
+    cx: mlx::mlx_array,
+    append_axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let re = ctx.emit(|res, s| unsafe { mlx::mlx_real(res, cx, s) })?;
     let im = ctx.emit(|res, s| unsafe { mlx::mlx_imag(res, cx, s) })?;
     ctx.stack(&[re, im], append_axis)
@@ -119,9 +129,13 @@ fn dft_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     }
 
     let mut spectrum = if inverse {
-        ctx.emit(|res, s| unsafe { mlx::mlx_fft_ifft(res, signal, dft_length, axis, NORM_BACKWARD, s) })?
+        ctx.emit(|res, s| unsafe {
+            mlx::mlx_fft_ifft(res, signal, dft_length, axis, NORM_BACKWARD, s)
+        })?
     } else {
-        ctx.emit(|res, s| unsafe { mlx::mlx_fft_fft(res, signal, dft_length, axis, NORM_BACKWARD, s) })?
+        ctx.emit(|res, s| unsafe {
+            mlx::mlx_fft_fft(res, signal, dft_length, axis, NORM_BACKWARD, s)
+        })?
     };
 
     if onesided && !inverse {
@@ -148,7 +162,11 @@ fn is_scalar_shape(shape: &[i64]) -> bool {
 
 fn const_scalar_int(node: &NodeView, i: usize) -> bool {
     match node.input_info(i) {
-        Some(info) => is_int_type(info.dtype) && is_scalar_shape(&info.shape) && node.is_constant_initializer(i),
+        Some(info) => {
+            is_int_type(info.dtype)
+                && is_scalar_shape(&info.shape)
+                && node.is_constant_initializer(i)
+        }
         None => false,
     }
 }
@@ -171,42 +189,52 @@ fn output_datatype_ok(node: &NodeView) -> bool {
         || dt == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BFLOAT16 as i64
 }
 
-fn dft_claim(node: &NodeView) -> bool {
+fn dft_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni == 0 || ni > 3 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        ni >= 1 && ni <= 3 && node.num_outputs() == 1,
+        "expects 1-3 inputs and 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
     let (in_info, out_info) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if in_info.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-        || out_info.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    {
-        return false;
-    }
+    require!(
+        in_info.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+            && out_info.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+        "input/output must both be fp32, got {} -> {}",
+        crate::registry::ort_dtype_name(in_info.dtype),
+        crate::registry::ort_dtype_name(out_info.dtype)
+    );
     let rank = in_info.shape.len();
-    if rank < 2 {
-        return false;
-    }
+    require!(rank >= 2, "input rank must be at least 2, got {rank}");
     let last = in_info.shape[rank - 1];
-    if last != 1 && last != 2 {
-        return false;
-    }
+    require!(
+        last == 1 || last == 2,
+        "input trailing real/imag dimension must be 1 or 2, got {last}"
+    );
     let since = node.since_version();
     let inverse = node.int_attr("inverse", 0);
     let onesided = node.int_attr("onesided", 0);
-    if (inverse != 0 && inverse != 1) || (onesided != 0 && onesided != 1) {
-        return false;
-    }
-    if inverse == 1 && onesided == 1 {
-        return false;
-    }
+    require!(
+        (inverse == 0 || inverse == 1) && (onesided == 0 || onesided == 1),
+        "inverse and onesided must each be 0 or 1, got inverse={inverse}, onesided={onesided}"
+    );
+    require!(
+        inverse != 1 || onesided != 1,
+        "inverse DFT does not support onesided=1"
+    );
     let mut axis: i64 = if since >= 20 {
         if node.input_present(2) {
+            require!(
+                const_scalar_int(node, 2),
+                "axis must be a constant scalar initializer"
+            );
             match node.read_const_scalar_f64(2) {
                 Some(v) => v as i64,
-                None => return false,
+                None => deny!("axis must be a constant scalar initializer"),
             }
         } else {
             -2
@@ -217,17 +245,22 @@ fn dft_claim(node: &NodeView) -> bool {
     if axis < 0 {
         axis += rank as i64;
     }
-    if axis < 0 || axis >= rank as i64 - 1 {
-        return false;
-    }
+    require!(
+        axis >= 0 && axis < rank as i64 - 1,
+        "axis is out of range for rank {rank} or selects the trailing real/imag dimension"
+    );
     if node.input_present(1) {
-        if !const_scalar_int(node, 1) {
-            return false;
-        }
-    } else if in_info.shape[axis as usize] < 0 {
-        return false;
+        require!(
+            const_scalar_int(node, 1),
+            "dft_length must be a constant scalar initializer"
+        );
+    } else {
+        require!(
+            in_info.shape[axis as usize] >= 0,
+            "DFT axis dimension must be static when dft_length is omitted"
+        );
     }
-    true
+    Ok(())
 }
 
 // ---- STFT ---------------------------------------------------------------------------------------
@@ -240,7 +273,11 @@ fn stft_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     let frame_step = read_scalar_int(ctx, &n.inputs[1])? as i32;
 
     let has_window = present(n, 2);
-    let window = if has_window { Some(ctx.resolve(&n.inputs[2])?) } else { None };
+    let window = if has_window {
+        Some(ctx.resolve(&n.inputs[2])?)
+    } else {
+        None
+    };
     let frame_length: i32 = if let Some(w) = window {
         ctx.shape_of(w)[0]
     } else {
@@ -255,8 +292,14 @@ fn stft_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     let strides: [i64; 3] = [signal_len as i64, frame_step as i64, 1];
     let mut frames = ctx.emit(|res, s| unsafe {
         mlx::mlx_as_strided(
-            res, flat, frame_shape.as_ptr(), frame_shape.len(),
-            strides.as_ptr(), strides.len(), 0, s,
+            res,
+            flat,
+            frame_shape.as_ptr(),
+            frame_shape.len(),
+            strides.as_ptr(),
+            strides.len(),
+            0,
+            s,
         )
     })?;
     if let Some(w) = window {
@@ -264,9 +307,13 @@ fn stft_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     }
 
     let spectrum = if onesided {
-        ctx.emit(|res, s| unsafe { mlx::mlx_fft_rfft(res, frames, frame_length, 2, NORM_BACKWARD, s) })?
+        ctx.emit(|res, s| unsafe {
+            mlx::mlx_fft_rfft(res, frames, frame_length, 2, NORM_BACKWARD, s)
+        })?
     } else {
-        ctx.emit(|res, s| unsafe { mlx::mlx_fft_fft(res, frames, frame_length, 2, NORM_BACKWARD, s) })?
+        ctx.emit(|res, s| unsafe {
+            mlx::mlx_fft_fft(res, frames, frame_length, 2, NORM_BACKWARD, s)
+        })?
     };
 
     let out = stack_real_imag(ctx, spectrum, 3)?;
@@ -274,52 +321,86 @@ fn stft_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     Ok(())
 }
 
-fn stft_claim(node: &NodeView) -> bool {
+fn stft_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni < 2 || ni > 4 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        ni >= 2 && ni <= 4 && node.num_outputs() == 1,
+        "expects 2-4 inputs and 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
     let (sig, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on signal or output"),
     };
-    if sig.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-        || out.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    {
-        return false;
-    }
-    if sig.shape.len() != 3 || sig.shape[1] < 0 || sig.shape[2] != 1 {
-        return false;
-    }
-    if !node.input_present(1) || !const_scalar_int(node, 1) {
-        return false;
-    }
+    require!(
+        sig.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+            && out.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+        "signal/output must both be fp32, got {} -> {}",
+        crate::registry::ort_dtype_name(sig.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        sig.shape.len() == 3 && sig.shape[1] >= 0 && sig.shape[2] == 1,
+        "signal must have static shape [batch, length, 1], got {:?}",
+        sig.shape
+    );
+    require!(
+        node.input_present(1) && const_scalar_int(node, 1),
+        "frame_step must be a constant scalar initializer"
+    );
     let has_window = node.input_present(2);
     let has_frame_length = node.input_present(3);
     if has_window {
         match node.input_info(2) {
             Some(w)
-                if w.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                if w.dtype
+                    == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
                     && w.shape.len() == 1
                     && w.shape[0] >= 0 => {}
-            _ => return false,
+            Some(w) => deny!(
+                "window must be a static rank-1 fp32 tensor, got dtype {} shape {:?}",
+                crate::registry::ort_dtype_name(w.dtype),
+                w.shape
+            ),
+            None => deny!("missing tensor type/shape info on window"),
         }
-    } else if !has_frame_length || !const_scalar_int(node, 3) {
-        return false;
+    } else {
+        require!(
+            has_frame_length && const_scalar_int(node, 3),
+            "frame_length must be a constant scalar initializer"
+        );
     }
-    if has_frame_length && !const_scalar_int(node, 3) {
-        return false;
+    if has_frame_length {
+        require!(
+            const_scalar_int(node, 3),
+            "frame_length must be a constant scalar initializer"
+        );
     }
     let onesided = node.int_attr("onesided", 1);
-    onesided == 0 || onesided == 1
+    require!(
+        onesided == 0 || onesided == 1,
+        "onesided must be 0 or 1, got {onesided}"
+    );
+    Ok(())
 }
 
 // ---- Cosine-sum windows -------------------------------------------------------------------------
 
-fn cosine_window(ctx: &mut TranslationContext, n: &NodeDesc, a0: f64, a1: f64, a2: f64) -> Result<(), MlxError> {
+fn cosine_window(
+    ctx: &mut TranslationContext,
+    n: &NodeDesc,
+    a0: f64,
+    a1: f64,
+    a2: f64,
+) -> Result<(), MlxError> {
     let size = read_scalar_int(ctx, &n.inputs[0])?;
     let periodic = n.ints.get("periodic").copied().unwrap_or(1) != 0;
-    let mut denom = if periodic { size as f64 } else { (size - 1) as f64 };
+    let mut denom = if periodic {
+        size as f64
+    } else {
+        (size - 1) as f64
+    };
     if denom <= 0.0 {
         denom = 1.0;
     }
@@ -357,22 +438,38 @@ fn blackman_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErro
     cosine_window(ctx, n, 0.42, 0.5, 0.08)
 }
 
-fn window_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
-    if !const_scalar_int(node, 0) {
-        return false;
-    }
+fn window_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        const_scalar_int(node, 0),
+        "size must be a constant scalar initializer"
+    );
     match node.output_info(0) {
         Some(o) if is_mlx_float(o.dtype) => {}
-        _ => return false,
+        Some(o) => deny!(
+            "output dtype {} is not supported; expected fp32/fp16/bf16",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("missing tensor type/shape info on output"),
     }
-    if !output_datatype_ok(node) {
-        return false;
-    }
+    require!(
+        output_datatype_ok(node),
+        "output_datatype {} is not supported; expected fp32, fp16, or bf16",
+        crate::registry::ort_dtype_name(
+            node.int_attr("output_datatype", 1) as ort::ONNXTensorElementDataType
+        )
+    );
     let periodic = node.int_attr("periodic", 1);
-    periodic == 0 || periodic == 1
+    require!(
+        periodic == 0 || periodic == 1,
+        "periodic must be 0 or 1, got {periodic}"
+    );
+    Ok(())
 }
 
 // ---- MelWeightMatrix ----------------------------------------------------------------------------
@@ -426,31 +523,68 @@ fn mel_weight_matrix_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<()
     }
 
     let mat_shape = [num_spectrogram_bins, num_mel_bins];
-    let arr = ctx.from_host(out.as_ptr() as *const std::os::raw::c_void, &mat_shape, mlx::mlx_dtype__MLX_FLOAT32);
+    let arr = ctx.from_host(
+        out.as_ptr() as *const std::os::raw::c_void,
+        &mat_shape,
+        mlx::mlx_dtype__MLX_FLOAT32,
+    );
     ctx.bind(&n.outputs[0], arr);
     Ok(())
 }
 
-fn mel_weight_matrix_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 5 || node.num_outputs() != 1 {
-        return false;
-    }
-    if !const_scalar_int(node, 0) || !const_scalar_int(node, 1) || !const_scalar_int(node, 2) {
-        return false;
-    }
-    if !const_scalar_float(node, 3) || !const_scalar_float(node, 4) {
-        return false;
-    }
+fn mel_weight_matrix_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 5 && node.num_outputs() == 1,
+        "expects 5 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        const_scalar_int(node, 0),
+        "num_mel_bins must be a constant scalar initializer"
+    );
+    require!(
+        const_scalar_int(node, 1),
+        "dft_length must be a constant scalar initializer"
+    );
+    require!(
+        const_scalar_int(node, 2),
+        "sample_rate must be a constant scalar initializer"
+    );
+    require!(
+        const_scalar_float(node, 3),
+        "lower_edge_hertz must be a constant scalar initializer"
+    );
+    require!(
+        const_scalar_float(node, 4),
+        "upper_edge_hertz must be a constant scalar initializer"
+    );
     match node.output_info(0) {
         Some(o) if is_mlx_float(o.dtype) => {}
-        _ => return false,
+        Some(o) => deny!(
+            "output dtype {} is not supported; expected fp32/fp16/bf16",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("missing tensor type/shape info on output"),
     }
-    output_datatype_ok(node)
+    require!(
+        output_datatype_ok(node),
+        "output_datatype {} is not supported; expected fp32, fp16, or bf16",
+        crate::registry::ort_dtype_name(
+            node.int_attr("output_datatype", 1) as ort::ONNXTensorElementDataType
+        )
+    );
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------
 
-fn reg(registry: &mut OpRegistry, op_type: &'static str, handler: OpHandler, claim: ClaimPredicate) {
+fn reg(
+    registry: &mut OpRegistry,
+    op_type: &'static str,
+    handler: OpHandler,
+    claim: ClaimPredicate,
+) {
     registry.register(OpRegistration {
         domain: "",
         op_type,
@@ -467,5 +601,10 @@ pub fn register(registry: &mut OpRegistry) {
     reg(registry, "HannWindow", hann_op, window_claim);
     reg(registry, "HammingWindow", hamming_op, window_claim);
     reg(registry, "BlackmanWindow", blackman_op, window_claim);
-    reg(registry, "MelWeightMatrix", mel_weight_matrix_op, mel_weight_matrix_claim);
+    reg(
+        registry,
+        "MelWeightMatrix",
+        mel_weight_matrix_op,
+        mel_weight_matrix_claim,
+    );
 }

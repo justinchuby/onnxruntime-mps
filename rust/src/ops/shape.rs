@@ -12,11 +12,12 @@
 use crate::engine::{dim_i32, mlx_dtype_from_onnx, MlxError, NodeDesc, Src, TranslationContext};
 use crate::mlx::{Array, VectorArray};
 use crate::registry::{
-    is_int_index, is_mlx_float, is_mlx_numeric, is_movable, is_range_type, NodeView, OpRegistration,
-    OpRegistry, K_ANY_OPSET,
+    is_int_index, is_mlx_float, is_mlx_numeric, is_movable, is_range_type, ClaimResult, NodeView,
+    OpRegistration, OpRegistry, K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- small helpers -----------------------------------------------------------------------------
 
@@ -682,28 +683,51 @@ fn movable_io(node: &NodeView) -> Option<(ort::ONNXTensorElementDataType, ort::O
     }
 }
 
-fn gather_like_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn gather_like_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "Gather/GatherElements expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (data, out) = match movable_io(node) {
         Some(v) => v,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the data input or output"),
     };
     let idx = match node.input_info(1) {
         Some(i) => i.dtype,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the indices input"),
     };
-    is_movable(data) && out == data && is_int_index(idx)
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        is_int_index(idx),
+        "indices dtype {} must be int32/int64",
+        crate::registry::ort_dtype_name(idx)
+    );
+    Ok(())
 }
 
-fn scatter_elements_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3
-        || node.num_outputs() != 1
-        || node.string_attr("reduction", "none") != "none"
-    {
-        return false;
-    }
+fn scatter_elements_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "ScatterElements expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        node.string_attr("reduction", "none") == "none",
+        "ScatterElements: only reduction=none is claimed (add/mul/min/max reductions stay on CPU)"
+    );
     let (data, indices, updates, out) = match (
         node.input_info(0),
         node.input_info(1),
@@ -711,165 +735,319 @@ fn scatter_elements_claim(node: &NodeView) -> bool {
         node.output_info(0),
     ) {
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     // mlx_put_along_axis's GPU kernel aborts on int64 payloads → keep to MLX float dtypes.
-    if !is_mlx_float(data.dtype)
-        || !is_int_index(indices.dtype)
-        || updates.dtype != data.dtype
-        || out.dtype != data.dtype
-        || data.shape.is_empty()
-        || indices.shape != updates.shape
-        || indices.shape.len() != data.shape.len()
-        || out.shape != data.shape
-    {
-        return false;
-    }
+    require!(
+        is_mlx_float(data.dtype),
+        "data dtype {} unsupported: mlx_put_along_axis's GPU kernel needs an MLX float (fp32/fp16/bf16)",
+        crate::registry::ort_dtype_name(data.dtype)
+    );
+    require!(
+        is_int_index(indices.dtype),
+        "indices dtype {} must be int32/int64",
+        crate::registry::ort_dtype_name(indices.dtype)
+    );
+    require!(
+        updates.dtype == data.dtype && out.dtype == data.dtype,
+        "updates/output dtype must match data dtype {} (got updates {}, out {})",
+        crate::registry::ort_dtype_name(data.dtype),
+        crate::registry::ort_dtype_name(updates.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        !data.shape.is_empty(),
+        "data must have rank >= 1 (scalar data is unsupported)"
+    );
+    require!(
+        indices.shape == updates.shape,
+        "indices shape {:?} must equal updates shape {:?}",
+        indices.shape,
+        updates.shape
+    );
+    require!(
+        indices.shape.len() == data.shape.len(),
+        "indices rank {} must equal data rank {}",
+        indices.shape.len(),
+        data.shape.len()
+    );
+    require!(
+        out.shape == data.shape,
+        "output shape {:?} must equal data shape {:?}",
+        out.shape,
+        data.shape
+    );
     let rank = data.shape.len() as i64;
     let axis = node.int_attr("axis", 0);
-    if axis < -rank || axis >= rank {
-        return false;
-    }
+    require!(
+        axis >= -rank && axis < rank,
+        "axis {axis} is out of range for rank {rank}"
+    );
     let ax = norm_axis(axis, rank as i32) as usize;
     for i in 0..data.shape.len() {
-        if i != ax && indices.shape[i] > data.shape[i] {
-            return false;
-        }
+        require!(
+            i == ax || indices.shape[i] <= data.shape[i],
+            "on non-axis dim {i}, indices extent {} must be <= data extent {}",
+            indices.shape[i],
+            data.shape[i]
+        );
     }
-    true
+    Ok(())
 }
 
-fn concat_claim(node: &NodeView) -> bool {
-    if node.num_inputs() == 0 || node.num_outputs() != 1 {
-        return false;
-    }
+fn concat_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() != 0 && node.num_outputs() == 1,
+        "Concat expects 1+ inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let out = match node.output_info(0) {
         Some(o) if is_movable(o.dtype) => o.dtype,
-        _ => return false,
+        Some(o) => deny!(
+            "output dtype {} is not a movable dtype supported on GPU",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("missing output tensor type/shape info"),
     };
     for i in 0..node.num_inputs() {
         match node.input_info(i) {
             Some(info) if info.dtype == out => {}
-            _ => return false,
+            Some(info) => deny!(
+                "input[{i}] dtype {} must match output dtype {}",
+                crate::registry::ort_dtype_name(info.dtype),
+                crate::registry::ort_dtype_name(out)
+            ),
+            None => deny!("input[{i}] has no tensor type/shape info"),
         }
     }
-    true
+    Ok(())
 }
 
-fn reshape_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn reshape_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "Reshape expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (data, out) = match movable_io(node) {
         Some(v) => v,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the data input or output"),
     };
-    is_movable(data) && out == data && node.is_const_int64(1) && node.int_attr("allowzero", 0) == 0
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        node.is_const_int64(1),
+        "Reshape: only a constant int64 `shape` initializer is claimed; this node's is a runtime value — stays on CPU"
+    );
+    require!(
+        node.int_attr("allowzero", 0) == 0,
+        "Reshape: allowzero=1 is unsupported (only the default copy-input-dim-on-zero behavior is claimed)"
+    );
+    Ok(())
 }
 
-fn transpose_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
-    match movable_io(node) {
-        Some((data, out)) => is_movable(data) && out == data,
-        None => false,
-    }
-}
-
-fn unsqueeze_claim(node: &NodeView) -> bool {
-    if node.num_inputs() == 0 || node.num_outputs() != 1 {
-        return false;
-    }
+fn transpose_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (data, out) = match movable_io(node) {
         Some(v) => v,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the input or output"),
     };
-    if !is_movable(data) || out != data {
-        return false;
-    }
+    require!(
+        is_movable(data),
+        "input dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match input dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    Ok(())
+}
+
+fn unsqueeze_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() != 0 && node.num_outputs() == 1,
+        "Unsqueeze/Squeeze expects 1+ inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (data, out) = match movable_io(node) {
+        Some(v) => v,
+        None => deny!("missing tensor type/shape info on the data input or output"),
+    };
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
     if node.num_inputs() == 2 {
-        return node.is_const_int64(1);
+        require!(
+            node.is_const_int64(1),
+            "Unsqueeze/Squeeze: only a constant int64 `axes` initializer is claimed; this node's is a runtime value — stays on CPU"
+        );
+        return Ok(());
     }
-    node.num_inputs() == 1
+    require!(
+        node.num_inputs() == 1,
+        "Unsqueeze/Squeeze: expected 1 or 2 inputs, got {}",
+        node.num_inputs()
+    );
+    Ok(())
 }
 
-fn squeeze_claim(node: &NodeView) -> bool {
+fn squeeze_claim(node: &NodeView) -> ClaimResult {
     unsqueeze_claim(node)
 }
 
-fn flatten_claim(node: &NodeView) -> bool {
+fn flatten_claim(node: &NodeView) -> ClaimResult {
     transpose_claim(node)
 }
 
-fn expand_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
-    match movable_io(node) {
-        Some((data, out)) => is_movable(data) && out == data && node.is_const_int64(1),
-        None => false,
-    }
-}
-
-fn slice_claim(node: &NodeView) -> bool {
-    let nin = node.num_inputs();
-    if nin < 3 || nin > 5 || node.num_outputs() != 1 {
-        return false;
-    }
+fn expand_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "Expand expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (data, out) = match movable_io(node) {
         Some(v) => v,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the data input or output"),
     };
-    if !is_movable(data) || out != data {
-        return false;
-    }
-    if !node.is_const_int64(1) || !node.is_const_int64(2) {
-        return false;
-    }
-    if nin >= 4 && node.input_present(3) && !node.is_const_int64(3) {
-        return false;
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        node.is_const_int64(1),
+        "Expand: only a constant int64 `shape` initializer is claimed; this node's is a runtime value — stays on CPU"
+    );
+    Ok(())
+}
+
+fn slice_claim(node: &NodeView) -> ClaimResult {
+    let nin = node.num_inputs();
+    require!(
+        nin >= 3 && nin <= 5 && node.num_outputs() == 1,
+        "Slice expects 3-5 inputs and 1 output, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
+    let (data, out) = match movable_io(node) {
+        Some(v) => v,
+        None => deny!("missing tensor type/shape info on the data input or output"),
+    };
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        node.is_const_int64(1) && node.is_const_int64(2),
+        "Slice: `starts` and `ends` must be constant int64 initializers; this node's are runtime values — stays on CPU"
+    );
+    if nin >= 4 && node.input_present(3) {
+        require!(
+            node.is_const_int64(3),
+            "Slice: `axes` must be a constant int64 initializer; this node's is a runtime value — stays on CPU"
+        );
     }
     if nin >= 5 && node.input_present(4) {
         match node.read_const_int64(4) {
             Some(steps) => {
-                if steps.iter().any(|&st| st < 1) {
-                    return false; // negative/zero strides left to CPU
-                }
+                require!(
+                    steps.iter().all(|&st| st >= 1),
+                    "Slice: negative/zero `steps` (reverse or strided slicing) are unsupported — left to CPU"
+                );
             }
-            None => return false,
+            None => deny!(
+                "Slice: `steps` must be a constant int64 initializer; this node's is a runtime value — stays on CPU"
+            ),
         }
     }
-    true
+    Ok(())
 }
 
-fn split_claim(node: &NodeView) -> bool {
+fn split_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin == 0 || nin > 2 || node.num_outputs() == 0 {
-        return false;
-    }
+    require!(
+        nin != 0 && nin <= 2 && node.num_outputs() != 0,
+        "Split expects 1-2 inputs and 1+ outputs, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
     let data = match node.input_info(0) {
         Some(d) if is_movable(d.dtype) && !d.shape.is_empty() => d,
-        _ => return false,
+        Some(d) => deny!(
+            "Split: data dtype {} must be a movable GPU dtype and data must be non-scalar (shape {:?})",
+            crate::registry::ort_dtype_name(d.dtype),
+            d.shape
+        ),
+        None => deny!("missing data tensor type/shape info"),
     };
     for i in 0..node.num_outputs() {
         match node.output_info(i) {
             Some(o) if o.dtype == data.dtype => {}
-            _ => return false,
+            Some(o) => deny!(
+                "Split: output[{i}] dtype {} must match data dtype {}",
+                crate::registry::ort_dtype_name(o.dtype),
+                crate::registry::ort_dtype_name(data.dtype)
+            ),
+            None => deny!("Split: output[{i}] has no tensor type/shape info"),
         }
     }
     let rank = data.shape.len() as i64;
     let axis = node.int_attr("axis", 0);
-    if axis < -rank || axis >= rank {
-        return false;
-    }
+    require!(
+        axis >= -rank && axis < rank,
+        "axis {axis} is out of range for rank {rank}"
+    );
     let axis_size = data.shape[norm_axis(axis, rank as i32) as usize];
 
     // Explicit per-section sizes: opset-13 `split` input or opset<13 `split` INTS attribute.
     let (have_sizes, sizes) = if nin == 2 && node.input_present(1) {
         match node.read_const_int64(1) {
             Some(s) => (true, s),
-            None => return false, // dynamic split sizes → CPU
+            None => deny!(
+                "Split: dynamic `split` sizes are unsupported; only a constant int64 `split` initializer is claimed — stays on CPU"
+            ),
         }
     } else {
         let (present, s) = node.ints_attr("split");
@@ -878,74 +1056,145 @@ fn split_claim(node: &NodeView) -> bool {
     if have_sizes {
         let mut total = 0i64;
         for &s in &sizes {
-            if s < 0 {
-                return false;
-            }
+            require!(s >= 0, "Split: `split` sizes must be non-negative (got {s})");
             total += s;
         }
-        return sizes.len() == node.num_outputs() && total == axis_size;
+        require!(
+            sizes.len() == node.num_outputs(),
+            "Split: `split` count {} must equal the number of outputs {}",
+            sizes.len(),
+            node.num_outputs()
+        );
+        require!(
+            total == axis_size,
+            "Split: `split` sizes sum {total} must equal axis extent {axis_size}"
+        );
+        return Ok(());
     }
     // Equal split: MLX requires the axis to divide evenly by the output count.
-    axis_size % node.num_outputs() as i64 == 0
+    require!(
+        axis_size % node.num_outputs() as i64 == 0,
+        "Split: equal split requires axis extent {axis_size} to divide evenly by output count {}",
+        node.num_outputs()
+    );
+    Ok(())
 }
 
-fn tile_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
-    match movable_io(node) {
-        Some((data, out)) => is_movable(data) && out == data && node.is_const_int64(1),
-        None => false,
-    }
-}
-
-fn pad_claim(node: &NodeView) -> bool {
-    let nin = node.num_inputs();
-    if nin < 2 || nin > 4 || node.num_outputs() != 1 {
-        return false;
-    }
+fn tile_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "Tile expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (data, out) = match movable_io(node) {
         Some(v) => v,
-        None => return false,
+        None => deny!("missing tensor type/shape info on the data input or output"),
     };
-    if !is_movable(data) || out != data || node.string_attr("mode", "constant") != "constant" {
-        return false;
-    }
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        node.is_const_int64(1),
+        "Tile: only a constant `repeats` initializer is claimed; this node's is a runtime value — stays on CPU"
+    );
+    Ok(())
+}
+
+fn pad_claim(node: &NodeView) -> ClaimResult {
+    let nin = node.num_inputs();
+    require!(
+        nin >= 2 && nin <= 4 && node.num_outputs() == 1,
+        "Pad expects 2-4 inputs and 1 output, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
+    let (data, out) = match movable_io(node) {
+        Some(v) => v,
+        None => deny!("missing tensor type/shape info on the data input or output"),
+    };
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        out == data,
+        "output dtype {} must match data dtype {}",
+        crate::registry::ort_dtype_name(out),
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(
+        node.string_attr("mode", "constant") == "constant",
+        "Pad: only constant, non-negative `pads` with mode=constant are claimed (runtime pads, negative/cropping pads, or reflect/edge modes stay on CPU)"
+    );
     match node.read_const_int64(1) {
         Some(pads) => {
-            if pads.iter().any(|&p| p < 0) {
-                return false; // negative pads (cropping) left to CPU
-            }
+            require!(
+                pads.iter().all(|&p| p >= 0),
+                "Pad: only constant, non-negative `pads` with mode=constant are claimed (runtime pads, negative/cropping pads, or reflect/edge modes stay on CPU)"
+            );
         }
-        None => return false,
+        None => deny!(
+            "Pad: only constant, non-negative `pads` with mode=constant are claimed (runtime pads, negative/cropping pads, or reflect/edge modes stay on CPU)"
+        ),
     }
     if nin >= 3 && node.input_present(2) {
         match node.input_info(2) {
             Some(cv) if cv.dtype == data => {}
-            _ => return false,
+            Some(cv) => deny!(
+                "Pad: constant_value dtype {} must match data dtype {}",
+                crate::registry::ort_dtype_name(cv.dtype),
+                crate::registry::ort_dtype_name(data)
+            ),
+            None => deny!("Pad: constant_value input has no tensor type/shape info"),
         }
     }
-    if nin >= 4 && node.input_present(3) && !node.is_const_int64(3) {
-        return false;
+    if nin >= 4 && node.input_present(3) {
+        require!(
+            node.is_const_int64(3),
+            "Pad: `axes` must be a constant int64 initializer; this node's is a runtime value — stays on CPU"
+        );
     }
-    true
+    Ok(())
 }
 
-fn identity_claim(node: &NodeView) -> bool {
+fn identity_claim(node: &NodeView) -> ClaimResult {
     transpose_claim(node)
 }
 
-fn range_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn range_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "Range expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let ty = match node.input_info(0) {
         Some(i) if is_range_type(i.dtype) => i.dtype,
-        _ => return false,
+        Some(i) => deny!(
+            "Range: start dtype {} unsupported (only int32/int64/fp32 range types are claimed)",
+            crate::registry::ort_dtype_name(i.dtype)
+        ),
+        None => deny!("missing `start` tensor type/shape info"),
     };
     let out = match node.output_info(0) {
         Some(o) if o.dtype == ty && o.shape.len() == 1 => o,
-        _ => return false,
+        Some(o) => deny!(
+            "Range: output dtype {} must equal start dtype {} and output must be 1-D (shape {:?})",
+            crate::registry::ort_dtype_name(o.dtype),
+            crate::registry::ort_dtype_name(ty),
+            o.shape
+        ),
+        None => deny!("missing output tensor type/shape info"),
     };
     let (start, limit, delta) = match (
         node.read_const_scalar_f64(0),
@@ -953,22 +1202,39 @@ fn range_claim(node: &NodeView) -> bool {
         node.read_const_scalar_f64(2),
     ) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => return false,
+        _ => deny!(
+            "Range: `start`/`limit`/`delta` must be constant scalar initializers; this node's are runtime values — stays on CPU"
+        ),
     };
-    if delta == 0.0 {
-        return false;
-    }
+    require!(delta != 0.0, "Range: `delta` must be non-zero");
     let count = ((limit - start) / delta).ceil().max(0.0);
-    count.is_finite() && count <= i32::MAX as f64 && out.shape[0] == count as i64
+    require!(
+        count.is_finite() && count <= i32::MAX as f64,
+        "Range: computed element count {count} is not finite or exceeds i32::MAX"
+    );
+    require!(
+        out.shape[0] == count as i64,
+        "Range: output extent {} must equal computed element count {}",
+        out.shape[0],
+        count as i64
+    );
+    Ok(())
 }
 
-fn shape_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn shape_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "Shape expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let data = match node.input_info(0) {
         Some(d) if is_movable(d.dtype) => d,
-        _ => return false,
+        Some(d) => deny!(
+            "data dtype {} is not a movable dtype supported on GPU",
+            crate::registry::ort_dtype_name(d.dtype)
+        ),
+        None => deny!("missing data tensor type/shape info"),
     };
     let out = match node.output_info(0) {
         Some(o)
@@ -977,100 +1243,167 @@ fn shape_claim(node: &NodeView) -> bool {
         {
             o
         }
-        _ => return false,
+        Some(o) => deny!(
+            "Shape: output must be a 1-D int64 tensor (got {} shape {:?})",
+            crate::registry::ort_dtype_name(o.dtype),
+            o.shape
+        ),
+        None => deny!("missing output tensor type/shape info"),
     };
     let rank = data.shape.len() as i64;
     let (s, e) = shape_interval(rank, node.int_attr("start", 0), node.int_attr("end", rank));
-    out.shape[0] == e - s
+    require!(
+        out.shape[0] == e - s,
+        "Shape: output extent {} must equal the sliced rank interval {} (start..end)",
+        out.shape[0],
+        e - s
+    );
+    Ok(())
 }
 
-fn size_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
-    let data_ok = matches!(node.input_info(0), Some(d) if is_movable(d.dtype));
-    let out_ok = matches!(node.output_info(0), Some(o)
-        if o.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-            && o.shape.is_empty());
-    data_ok && out_ok
+fn size_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "Size expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        matches!(node.input_info(0), Some(d) if is_movable(d.dtype)),
+        "Size: data must have a movable GPU dtype with known tensor info"
+    );
+    require!(
+        matches!(node.output_info(0), Some(o)
+            if o.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+                && o.shape.is_empty()),
+        "Size: output must be a scalar int64 tensor"
+    );
+    Ok(())
 }
 
-fn constant_of_shape_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn constant_of_shape_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "ConstantOfShape expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let out = match node.output_info(0) {
         Some(o) if is_movable(o.dtype) => o.dtype,
-        _ => return false,
+        Some(o) => deny!(
+            "output dtype {} is not a movable dtype supported on GPU",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("missing output tensor type/shape info"),
     };
     let shape = match node.read_const_int64(0) {
         Some(s) => s,
-        None => return false,
+        None => deny!(
+            "ConstantOfShape: `input` shape must be a constant int64 initializer; this node's is a runtime value — stays on CPU"
+        ),
     };
-    if shape.iter().any(|&d| d < 0 || d > i32::MAX as i64) {
-        return false;
-    }
+    require!(
+        shape.iter().all(|&d| d >= 0 && d <= i32::MAX as i64),
+        "ConstantOfShape: shape dims must be in [0, i32::MAX] (got {:?})",
+        shape
+    );
     // The `value` TENSOR attribute is not carried through the NodeDesc, so only the no-value-attr
     // fp32-zeros form is claimed; ORT CPU constant-folds / evaluates the explicit-value forms.
-    if node.has_attr("value") {
-        return false;
-    }
-    out == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+    require!(
+        !node.has_attr("value"),
+        "ConstantOfShape: an explicit `value` attribute is not claimed (only the default fp32-zeros form is); ORT CPU evaluates the explicit-value forms"
+    );
+    require!(
+        out == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+        "ConstantOfShape: only fp32 output is claimed (the default-value zeros form), got {}",
+        crate::registry::ort_dtype_name(out)
+    );
+    Ok(())
 }
 
-fn resize_claim(node: &NodeView) -> bool {
-    if node.num_inputs() < 3 || node.num_inputs() > 4 || node.num_outputs() != 1 {
-        return false;
-    }
+fn resize_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() >= 3 && node.num_inputs() <= 4 && node.num_outputs() == 1,
+        "Resize expects 3-4 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (input, output) = match (node.input_info(0), node.output_info(0)) {
         (Some(input), Some(output)) => (input, output),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on the input or output"),
     };
     let rank = input.shape.len();
     // Spatial dims MAY be dynamic (<=0): the concrete input size is resolved at trace time from
     // `ctx.shape_of`, so we only require the resize TARGET to be statically determinable (constant
     // `scales`/`sizes`) and the batch/channel dims to be untouched. Rank must be known and match.
-    if !is_mlx_float(input.dtype)
-        || output.dtype != input.dtype
-        || rank == 0
-        || rank > 4
-        || output.shape.len() != rank
-    {
-        return false;
-    }
+    require!(
+        is_mlx_float(input.dtype),
+        "Resize: input dtype {} must be an MLX float (fp32/fp16/bf16)",
+        crate::registry::ort_dtype_name(input.dtype)
+    );
+    require!(
+        output.dtype == input.dtype,
+        "Resize: output dtype {} must match input dtype {}",
+        crate::registry::ort_dtype_name(output.dtype),
+        crate::registry::ort_dtype_name(input.dtype)
+    );
+    require!(
+        rank != 0 && rank <= 4,
+        "Resize: input rank {rank} unsupported (only 1-D..4-D tensors are claimed)"
+    );
+    require!(
+        output.shape.len() == rank,
+        "Resize: output rank {} must equal input rank {rank}",
+        output.shape.len()
+    );
     let mode = node.string_attr("mode", "nearest");
-    if mode != "nearest" && mode != "linear" {
-        return false;
-    }
+    require!(
+        mode == "nearest" || mode == "linear",
+        "Resize: only mode=nearest|linear are claimed (got mode={mode}; cubic stays on CPU)"
+    );
     let coordinate_mode = node.string_attr("coordinate_transformation_mode", "half_pixel");
-    if !matches!(
-        coordinate_mode.as_str(),
-        "half_pixel" | "asymmetric" | "align_corners" | "pytorch_half_pixel"
-    ) {
-        return false;
-    }
-    if mode == "nearest"
-        && !matches!(
-            node.string_attr("nearest_mode", "round_prefer_floor")
-                .as_str(),
-            "round_prefer_floor" | "round_prefer_ceil" | "floor" | "ceil"
-        )
-    {
-        return false;
-    }
-    if node.int_attr("exclude_outside", 0) != 0
-        || node.int_attr("antialias", 0) != 0
-        || node.has_attr("axes")
-        || node.string_attr("keep_aspect_ratio_policy", "stretch") != "stretch"
-        || node.input_present(1)
-    {
-        return false;
-    }
+    require!(
+        matches!(
+            coordinate_mode.as_str(),
+            "half_pixel" | "asymmetric" | "align_corners" | "pytorch_half_pixel"
+        ),
+        "Resize: coordinate_transformation_mode={coordinate_mode} is unsupported (only half_pixel|asymmetric|align_corners|pytorch_half_pixel are claimed)"
+    );
+    require!(
+        mode != "nearest"
+            || matches!(
+                node.string_attr("nearest_mode", "round_prefer_floor").as_str(),
+                "round_prefer_floor" | "round_prefer_ceil" | "floor" | "ceil"
+            ),
+        "Resize: nearest_mode={} is unsupported (only round_prefer_floor|round_prefer_ceil|floor|ceil are claimed)",
+        node.string_attr("nearest_mode", "round_prefer_floor")
+    );
+    require!(
+        node.int_attr("exclude_outside", 0) == 0,
+        "Resize: exclude_outside=1 is unsupported — stays on CPU"
+    );
+    require!(
+        node.int_attr("antialias", 0) == 0,
+        "Resize: antialias=1 is unsupported — stays on CPU"
+    );
+    require!(
+        !node.has_attr("axes"),
+        "Resize: the `axes` attribute is unsupported (full-rank scales/sizes only) — stays on CPU"
+    );
+    require!(
+        node.string_attr("keep_aspect_ratio_policy", "stretch") == "stretch",
+        "Resize: only keep_aspect_ratio_policy=stretch is claimed — stays on CPU"
+    );
+    require!(
+        !node.input_present(1),
+        "Resize: the `roi` input (tf_crop_and_resize) is unsupported — stays on CPU"
+    );
     let has_scales = node.input_present(2);
     let has_sizes = node.input_present(3);
-    if has_scales == has_sizes {
-        return false;
-    }
+    require!(
+        has_scales != has_sizes,
+        "Resize: exactly one of `scales` or `sizes` must be provided (not both/neither)"
+    );
     // For rank>=3 the batch/channel axes (0,1) must NOT be resized — MLX resize here is
     // spatial-only, and a batch/channel target can't be verified against a dynamic input dim.
     let bc = if rank >= 3 { 2 } else { 0 };
@@ -1078,50 +1411,75 @@ fn resize_claim(node: &NodeView) -> bool {
         // Constant `sizes` give the exact (static) output extents directly.
         let sizes = match node.read_const_int64(3) {
             Some(s) if s.len() == rank && s.iter().all(|&v| v >= 1) => s,
-            _ => return false,
+            Some(s) => deny!(
+                "Resize: `sizes` must have rank {rank} with all entries >= 1 (got {:?})",
+                s
+            ),
+            None => deny!(
+                "Resize: only constant (initializer) `scales`/`sizes` are claimed; this node's are runtime/dynamic — precompute them or export a static-shape model"
+            ),
         };
         for ax in 0..bc {
             // Batch/channel: input dim must be static and unchanged.
-            if input.shape[ax] <= 0 || sizes[ax] != input.shape[ax] {
-                return false;
-            }
+            require!(
+                input.shape[ax] > 0 && sizes[ax] == input.shape[ax],
+                "Resize: batch/channel dim {ax} must be static and unchanged (input {}, requested size {})",
+                input.shape[ax],
+                sizes[ax]
+            );
         }
         for ax in bc..rank {
             // Where the output spatial dim is statically known, it must equal the requested size.
-            if output.shape[ax] > 0 && output.shape[ax] != sizes[ax] {
-                return false;
-            }
+            require!(
+                output.shape[ax] <= 0 || output.shape[ax] == sizes[ax],
+                "Resize: static output spatial dim {ax} ({}) must equal requested size {}",
+                output.shape[ax],
+                sizes[ax]
+            );
         }
-        true
+        Ok(())
     } else {
         // Constant `scales`: the concrete output is `floor(scale * input)` computed at trace time.
         let scales = match node.read_const_f32(2) {
             Some(s) if s.len() == rank && s.iter().all(|&v| v > 0.0) => s,
-            _ => return false,
+            Some(s) => deny!(
+                "Resize: `scales` must have rank {rank} with all entries > 0 (got {:?})",
+                s
+            ),
+            None => deny!(
+                "Resize: only constant (initializer) `scales`/`sizes` are claimed; this node's are runtime/dynamic — precompute them or export a static-shape model"
+            ),
         };
         for ax in 0..bc {
             // Batch/channel scale must be exactly 1 (no resize).
-            if (scales[ax] - 1.0).abs() > f32::EPSILON {
-                return false;
-            }
+            require!(
+                (scales[ax] - 1.0).abs() <= f32::EPSILON,
+                "Resize: batch/channel dim {ax} must not be resized (scale {} != 1)",
+                scales[ax]
+            );
         }
         for ax in bc..rank {
             // Where both input and output spatial dims are static, verify the computed extent.
             if input.shape[ax] > 0 && output.shape[ax] > 0 {
                 let computed = (scales[ax] as f64 * input.shape[ax] as f64).floor() as i64;
-                if computed != output.shape[ax] {
-                    return false;
-                }
+                require!(
+                    computed == output.shape[ax],
+                    "Resize: spatial dim {ax} computed extent {computed} (floor(scale*input)) must equal static output {}",
+                    output.shape[ax]
+                );
             }
         }
-        true
+        Ok(())
     }
 }
 
-fn where_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn where_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "Where expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (cond, x, y, out) = match (
         node.input_info(0),
         node.input_info(1),
@@ -1129,19 +1487,37 @@ fn where_claim(node: &NodeView) -> bool {
         node.output_info(0),
     ) {
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
     let is_bool = |t| t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
-    if !is_bool(cond.dtype)
-        || x.dtype != y.dtype
-        || y.dtype != out.dtype
-        || !(is_mlx_numeric(x.dtype) || is_bool(x.dtype))
-    {
-        return false;
-    }
-    crate::registry::scalar_or_suffix_broadcast(&cond.shape, &out.shape)
-        && crate::registry::scalar_or_suffix_broadcast(&x.shape, &out.shape)
-        && crate::registry::scalar_or_suffix_broadcast(&y.shape, &out.shape)
+    require!(
+        is_bool(cond.dtype),
+        "Where: `condition` must be bool (got {})",
+        crate::registry::ort_dtype_name(cond.dtype)
+    );
+    require!(
+        x.dtype == y.dtype && y.dtype == out.dtype,
+        "Where: X/Y/output must share one dtype (got {}, {} -> {})",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(y.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        is_mlx_numeric(x.dtype) || is_bool(x.dtype),
+        "Where: X/Y dtype {} must be numeric or bool",
+        crate::registry::ort_dtype_name(x.dtype)
+    );
+    require!(
+        crate::registry::scalar_or_suffix_broadcast(&cond.shape, &out.shape)
+            && crate::registry::scalar_or_suffix_broadcast(&x.shape, &out.shape)
+            && crate::registry::scalar_or_suffix_broadcast(&y.shape, &out.shape),
+        "Where: only scalar or trailing-suffix broadcast to the output shape is supported (cond {:?}, X {:?}, Y {:?} -> {:?})",
+        cond.shape,
+        x.shape,
+        y.shape,
+        out.shape
+    );
+    Ok(())
 }
 
 fn reg(

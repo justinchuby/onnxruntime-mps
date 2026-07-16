@@ -13,8 +13,11 @@
 use std::os::raw::c_char;
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
-use crate::registry::{is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
+use crate::registry::{
+    is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+};
 use crate::sys::mlx;
+use crate::{deny, require};
 
 // ---- small arithmetic/movement helpers ----------------------------------------------------------
 
@@ -503,40 +506,66 @@ fn optional_bias_is_valid(node: &NodeView, dtype: crate::sys::ort::ONNXTensorEle
 
 // ---- claim predicates ---------------------------------------------------------------------------
 
-fn conv_claim(node: &NodeView) -> bool {
+fn conv_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if !(2..=3).contains(&ni) || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        (2..=3).contains(&ni) && node.num_outputs() == 1,
+        "expects 2 or 3 inputs and 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
     let (x, w, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(w), Some(o)) => (x, w, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, W, or output"),
     };
-    if !is_mlx_float(x.dtype) || w.dtype != x.dtype || out.dtype != x.dtype {
-        return false;
-    }
-    if x.shape.len() != 3 && x.shape.len() != 4 {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && w.dtype == x.dtype && out.dtype == x.dtype,
+        "X/W/output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(w.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() == 3 || x.shape.len() == 4,
+        "only rank-3 Conv1D and rank-4 Conv2D are supported (got X rank {}); dynamic batch/spatial dims are supported",
+        x.shape.len()
+    );
     let spatial_rank = x.shape.len() - 2;
-    if !channels_static_dyn_batch_spatial(&x.shape, spatial_rank + 2)
-        || !static_positive_shape(&w.shape, spatial_rank + 2)
-        || out.shape.len() != spatial_rank + 2
-    {
-        return false;
-    }
+    require!(
+        channels_static_dyn_batch_spatial(&x.shape, spatial_rank + 2),
+        "X channel dim must be statically known and positive (shape {:?}); dynamic batch/spatial dims are supported",
+        x.shape
+    );
+    require!(
+        static_positive_shape(&w.shape, spatial_rank + 2),
+        "W must have rank {} with all dims statically known and positive (shape {:?})",
+        spatial_rank + 2,
+        w.shape
+    );
+    require!(
+        out.shape.len() == spatial_rank + 2,
+        "output rank must be {} to match X (got rank {})",
+        spatial_rank + 2,
+        out.shape.len()
+    );
     let spatial_dynamic = (0..spatial_rank).any(|i| x.shape[i + 2] <= 0);
-    if node.string_attr("auto_pad", "NOTSET") != "NOTSET" && node.ints_attr("pads").0 {
-        // ONNX forbids specifying both a non-NOTSET auto_pad and an explicit pads attribute.
-        return false;
-    }
+    require!(
+        node.string_attr("auto_pad", "NOTSET") == "NOTSET" || !node.ints_attr("pads").0,
+        "auto_pad and explicit pads cannot both be specified"
+    );
     let strides = match read_spatial_attribute(node, "strides", spatial_rank, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!(
+            "strides must contain {} positive spatial values",
+            spatial_rank
+        ),
     };
     let dilations = match read_spatial_attribute(node, "dilations", spatial_rank, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!(
+            "dilations must contain {} positive spatial values",
+            spatial_rank
+        ),
     };
     // `auto_pad` (SAME_UPPER/SAME_LOWER/VALID) resolves to explicit pads from the static input
     // spatial shape; NOTSET reads the `pads` attribute. SAME_* pads may be asymmetric — `conv_op`
@@ -546,7 +575,10 @@ fn conv_claim(node: &NodeView) -> bool {
         // Explicit pads are static regardless of dynamic spatial dims.
         match read_pads(node, spatial_rank) {
             Some(v) => Some(v),
-            None => return false,
+            None => deny!(
+                "pads must contain {} non-negative values",
+                spatial_rank * 2
+            ),
         }
     } else if spatial_dynamic {
         // auto_pad + dynamic spatial: pads depend on the runtime spatial extent, so they cannot be
@@ -557,7 +589,7 @@ fn conv_claim(node: &NodeView) -> bool {
         let kernel: Vec<i64> = (0..spatial_rank).map(|i| w.shape[i + 2]).collect();
         match auto_pad_pads(&auto_pad, &in_sp, &kernel, &strides, &dilations) {
             Some(v) => Some(v),
-            None => return false,
+            None => deny!("unsupported auto_pad value {auto_pad:?}"),
         }
     };
     // Asymmetric pads (`pads[i] != pads[i + spatial_rank]`) are supported: `conv_op` routes them
@@ -565,26 +597,42 @@ fn conv_claim(node: &NodeView) -> bool {
     // non-negativity checked in `read_pads` is required.
     let (kernel_present, kernel_shape) = node.ints_attr("kernel_shape");
     if kernel_present {
-        if kernel_shape.len() != spatial_rank {
-            return false;
-        }
+        require!(
+            kernel_shape.len() == spatial_rank,
+            "kernel_shape must contain {} values (got {:?})",
+            spatial_rank,
+            kernel_shape
+        );
         for i in 0..spatial_rank {
-            if kernel_shape[i] != w.shape[i + 2] {
-                return false;
-            }
+            require!(
+                kernel_shape[i] == w.shape[i + 2],
+                "kernel_shape {:?} must match W spatial shape {:?}",
+                kernel_shape,
+                &w.shape[2..]
+            );
         }
     }
     let group = node.int_attr("group", 1);
     let channels = x.shape[1];
     let out_channels = w.shape[0];
-    if group <= 0
-        || channels % group != 0
-        || out_channels % group != 0
-        || w.shape[1] != channels / group
-        || !optional_bias_is_valid(node, x.dtype, out_channels)
-    {
-        return false;
-    }
+    require!(group > 0, "group must be positive (got {group})");
+    require!(
+        channels % group == 0 && out_channels % group == 0,
+        "group {group} must divide both input channels {channels} and output channels {out_channels}"
+    );
+    require!(
+        w.shape[1] == channels / group,
+        "W input-channel dim must equal X channels/group (got {} vs {}/{})",
+        w.shape[1],
+        channels,
+        group
+    );
+    require!(
+        optional_bias_is_valid(node, x.dtype, out_channels),
+        "optional bias must have dtype {} and shape [{}]",
+        crate::registry::ort_dtype_name(x.dtype),
+        out_channels
+    );
     let mut expected = vec![x.shape[0], out_channels];
     for i in 0..spatial_rank {
         let in_dim = x.shape[i + 2];
@@ -593,9 +641,10 @@ fn conv_claim(node: &NodeView) -> bool {
             Some(pads) if in_dim > 0 => {
                 let effective_kernel = dilations[i] * (w.shape[i + 2] - 1) + 1;
                 let padded = in_dim + pads[i] + pads[i + spatial_rank];
-                if padded < effective_kernel {
-                    return false;
-                }
+                require!(
+                    padded >= effective_kernel,
+                    "padded spatial dim {i} ({padded}) is smaller than effective kernel {effective_kernel}"
+                );
                 expected.push((padded - effective_kernel) / strides[i] + 1);
             }
             // Dynamic spatial dim (or unresolved auto_pad pads) → the output extent is dynamic too;
@@ -603,126 +652,204 @@ fn conv_claim(node: &NodeView) -> bool {
             _ => expected.push(-1),
         }
     }
-    same_known_shape(&out.shape, &expected)
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?} (dynamic batch/spatial dims are wildcards)",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
-fn conv_transpose_claim(node: &NodeView) -> bool {
+fn conv_transpose_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if !(2..=3).contains(&ni) || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        (2..=3).contains(&ni) && node.num_outputs() == 1,
+        "expects 2 or 3 inputs and 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
     let (x, w, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(w), Some(o)) => (x, w, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, W, or output"),
     };
-    if !is_mlx_float(x.dtype)
-        || w.dtype != x.dtype
-        || out.dtype != x.dtype
-        || !static_positive_shape_dyn_batch(&x.shape, 4)
-        || !static_positive_shape(&w.shape, 4)
-        || out.shape.len() != 4
-    {
-        return false;
-    }
-    if node.string_attr("auto_pad", "NOTSET") != "NOTSET"
-        || node.int_attr("group", 1) != 1
-        || w.shape[0] != x.shape[1]
-    {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && w.dtype == x.dtype && out.dtype == x.dtype,
+        "X/W/output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(w.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        static_positive_shape_dyn_batch(&x.shape, 4),
+        "ConvTranspose requires rank-4 X with static positive channel/spatial dims (shape {:?}); dynamic batch is supported",
+        x.shape
+    );
+    require!(
+        static_positive_shape(&w.shape, 4),
+        "ConvTranspose requires rank-4 W with all dims statically known and positive (shape {:?})",
+        w.shape
+    );
+    require!(
+        out.shape.len() == 4,
+        "ConvTranspose output must have rank 4 (got rank {})",
+        out.shape.len()
+    );
+    require!(
+        node.string_attr("auto_pad", "NOTSET") == "NOTSET",
+        "ConvTranspose supports only auto_pad=NOTSET"
+    );
+    require!(
+        node.int_attr("group", 1) == 1,
+        "grouped ConvTranspose is unsupported (group must be 1)"
+    );
+    require!(
+        w.shape[0] == x.shape[1],
+        "W input-channel dim {} must match X channels {}",
+        w.shape[0],
+        x.shape[1]
+    );
     let strides = match read_spatial_attribute(node, "strides", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("strides must contain 2 positive spatial values"),
     };
     let dilations = match read_spatial_attribute(node, "dilations", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("dilations must contain 2 positive spatial values"),
     };
-    if dilations[0] != 1 || dilations[1] != 1 {
-        return false;
-    }
+    require!(
+        dilations == [1, 1],
+        "dilated ConvTranspose is unsupported (dilations must be [1, 1], got {:?})",
+        dilations
+    );
     let pads = match read_pads(node, 2) {
         Some(v) => v,
-        None => return false,
+        None => deny!("pads must contain 4 non-negative values"),
     };
-    if pads[0] != pads[2] || pads[1] != pads[3] {
-        return false;
-    }
+    require!(
+        pads[0] == pads[2] && pads[1] == pads[3],
+        "ConvTranspose requires symmetric pads (got {:?})",
+        pads
+    );
     let (op_present, mut output_padding) = node.ints_attr("output_padding");
     if !op_present {
         output_padding = vec![0, 0];
     }
-    if output_padding.len() != 2
-        || output_padding[0] < 0
-        || output_padding[1] < 0
-        || output_padding[0] >= strides[0]
-        || output_padding[1] >= strides[1]
-    {
-        return false;
-    }
+    require!(
+        output_padding.len() == 2
+            && output_padding[0] >= 0
+            && output_padding[1] >= 0
+            && output_padding[0] < strides[0]
+            && output_padding[1] < strides[1],
+        "output_padding must contain 2 non-negative values smaller than strides {:?} (got {:?})",
+        strides,
+        output_padding
+    );
     let (output_shape_present, _) = node.ints_attr("output_shape");
-    if output_shape_present {
-        return false;
-    }
+    require!(
+        !output_shape_present,
+        "the output_shape attribute is unsupported"
+    );
     let (kernel_present, kernel_shape) = node.ints_attr("kernel_shape");
-    if kernel_present && kernel_shape != vec![w.shape[2], w.shape[3]] {
-        return false;
-    }
+    require!(
+        !kernel_present || kernel_shape == vec![w.shape[2], w.shape[3]],
+        "kernel_shape {:?} must match W spatial shape {:?}",
+        kernel_shape,
+        &w.shape[2..]
+    );
     let out_channels = w.shape[1];
-    if !optional_bias_is_valid(node, x.dtype, out_channels) {
-        return false;
-    }
+    require!(
+        optional_bias_is_valid(node, x.dtype, out_channels),
+        "optional bias must have dtype {} and shape [{}]",
+        crate::registry::ort_dtype_name(x.dtype),
+        out_channels
+    );
     let expected = vec![
         x.shape[0],
         out_channels,
         strides[0] * (x.shape[2] - 1) + output_padding[0] + w.shape[2] - pads[0] - pads[2],
         strides[1] * (x.shape[3] - 1) + output_padding[1] + w.shape[3] - pads[1] - pads[3],
     ];
-    expected[2] > 0 && expected[3] > 0 && same_known_shape(&out.shape, &expected)
+    require!(
+        expected[2] > 0 && expected[3] > 0,
+        "derived output spatial shape must be positive (got {:?})",
+        &expected[2..]
+    );
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?}",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
-fn pool_claim(node: &NodeView, average: bool) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn pool_claim(node: &NodeView, average: bool) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(x.dtype)
-        || out.dtype != x.dtype
-        || !channels_static_dyn_batch_spatial(&x.shape, 4)
-        || out.shape.len() != 4
-        || node.int_attr("ceil_mode", 0) != 0
-    {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() == 4,
+        "only rank-4 Pool2D is supported (got input rank {}); dynamic batch/spatial dims are supported",
+        x.shape.len()
+    );
+    require!(
+        channels_static_dyn_batch_spatial(&x.shape, 4),
+        "input channel dim must be statically known and positive (shape {:?}); dynamic batch/spatial dims are supported",
+        x.shape
+    );
+    require!(
+        out.shape.len() == 4,
+        "Pool2D output must have rank 4 (got rank {})",
+        out.shape.len()
+    );
+    require!(
+        node.int_attr("ceil_mode", 0) == 0,
+        "ceil_mode=1 is unsupported"
+    );
     let spatial_dynamic = x.shape[2] <= 0 || x.shape[3] <= 0;
     let (kernel_present, kernel) = node.ints_attr("kernel_shape");
-    if !kernel_present || kernel.len() != 2 || kernel[0] <= 0 || kernel[1] <= 0 {
-        return false;
-    }
+    require!(
+        kernel_present && kernel.len() == 2 && kernel[0] > 0 && kernel[1] > 0,
+        "kernel_shape must contain 2 positive values (got {:?})",
+        kernel
+    );
     let strides = match read_spatial_attribute(node, "strides", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("strides must contain 2 positive spatial values"),
     };
     let dilations = match read_spatial_attribute(node, "dilations", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("dilations must contain 2 positive spatial values"),
     };
-    if dilations[0] != 1 || dilations[1] != 1 {
-        return false;
-    }
+    require!(
+        dilations == [1, 1],
+        "dilated pooling is unsupported (dilations must be [1, 1], got {:?})",
+        dilations
+    );
     // `auto_pad` (SAME_UPPER/SAME_LOWER/VALID) resolves to explicit pads from the static input
     // spatial shape (kernel_shape is the window); NOTSET reads the `pads` attribute.
     let auto_pad = node.string_attr("auto_pad", "NOTSET");
     let pads: Option<Vec<i64>> = if auto_pad == "NOTSET" {
         match read_pads(node, 2) {
             Some(v) => Some(v),
-            None => return false,
+            None => deny!("pads must contain 4 non-negative values"),
         }
     } else if node.ints_attr("pads").0 {
-        return false; // ONNX forbids both auto_pad and an explicit pads attribute
+        deny!("auto_pad and explicit pads cannot both be specified");
     } else if spatial_dynamic {
         // auto_pad + dynamic spatial: pads depend on the runtime spatial extent; `pool_op` resolves
         // them at trace time from the concrete `ctx.shape_of`.
@@ -731,25 +858,31 @@ fn pool_claim(node: &NodeView, average: bool) -> bool {
         let in_sp = [x.shape[2], x.shape[3]];
         match auto_pad_pads(&auto_pad, &in_sp, &kernel, &strides, &dilations) {
             Some(v) => Some(v),
-            None => return false,
+            None => deny!("unsupported auto_pad value {auto_pad:?}"),
         }
     };
     if average {
         let cip = node.int_attr("count_include_pad", 0);
-        if cip != 0 && cip != 1 {
-            return false;
-        }
-    } else if node.int_attr("storage_order", 0) != 0 {
-        return false;
+        require!(
+            cip == 0 || cip == 1,
+            "count_include_pad must be 0 or 1 (got {cip})"
+        );
+    } else {
+        require!(
+            node.int_attr("storage_order", 0) == 0,
+            "storage_order=1 is unsupported"
+        );
     }
     let expected = match &pads {
         // Static spatial with resolved pads → validate the derived output extent.
         Some(pads) if !spatial_dynamic => {
             let padded_h = x.shape[2] + pads[0] + pads[2];
             let padded_w = x.shape[3] + pads[1] + pads[3];
-            if padded_h < kernel[0] || padded_w < kernel[1] {
-                return false;
-            }
+            require!(
+                padded_h >= kernel[0] && padded_w >= kernel[1],
+                "padded spatial shape [{padded_h}, {padded_w}] is smaller than kernel {:?}",
+                kernel
+            );
             vec![
                 x.shape[0],
                 x.shape[1],
@@ -761,104 +894,182 @@ fn pool_claim(node: &NodeView, average: bool) -> bool {
         // concrete window math at trace time.
         _ => vec![x.shape[0], x.shape[1], -1, -1],
     };
-    same_known_shape(&out.shape, &expected)
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?} (dynamic batch/spatial dims are wildcards)",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
-fn average_pool_claim(node: &NodeView) -> bool {
+fn average_pool_claim(node: &NodeView) -> ClaimResult {
     pool_claim(node, true)
 }
 
-fn max_pool_claim(node: &NodeView) -> bool {
+fn max_pool_claim(node: &NodeView) -> ClaimResult {
     // MaxPool's optional 2nd output (indices) has no MLX argmax-window primitive here; only the
     // single-output form is claimed (mirrors the C++ single-output PoolClaim path).
-    if node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        node.num_outputs() == 1,
+        "MaxPool indices output is unsupported (expects 1 output, got {})",
+        node.num_outputs()
+    );
     pool_claim(node, false)
 }
 
-fn global_pool_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
-    match (node.input_info(0), node.output_info(0)) {
-        (Some(x), Some(out)) => {
-            is_mlx_float(x.dtype)
-                && out.dtype == x.dtype
-                && static_positive_shape_dyn_batch(&x.shape, 4)
-                && same_known_shape(&out.shape, &[x.shape[0], x.shape[1], 1, 1])
-        }
-        _ => false,
-    }
+fn global_pool_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (x, out) = match (node.input_info(0), node.output_info(0)) {
+        (Some(x), Some(out)) => (x, out),
+        _ => deny!("missing tensor type/shape info on input or output"),
+    };
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        static_positive_shape_dyn_batch(&x.shape, 4),
+        "global Pool requires rank-4 input with static positive channel/spatial dims (shape {:?}); dynamic batch is supported",
+        x.shape
+    );
+    let expected = [x.shape[0], x.shape[1], 1, 1];
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?}",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
-fn lp_pool_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn lp_pool_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(x.dtype)
-        || out.dtype != x.dtype
-        || !static_positive_shape_dyn_batch(&x.shape, 4)
-        || out.shape.len() != 4
-    {
-        return false;
-    }
-    if node.string_attr("auto_pad", "NOTSET") != "NOTSET"
-        || node.int_attr("ceil_mode", 0) != 0
-        || node.int_attr("p", 2) <= 0
-    {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        static_positive_shape_dyn_batch(&x.shape, 4),
+        "LpPool requires rank-4 input with static positive channel/spatial dims (shape {:?}); dynamic batch is supported",
+        x.shape
+    );
+    require!(
+        out.shape.len() == 4,
+        "LpPool output must have rank 4 (got rank {})",
+        out.shape.len()
+    );
+    require!(
+        node.string_attr("auto_pad", "NOTSET") == "NOTSET",
+        "LpPool supports only auto_pad=NOTSET"
+    );
+    require!(
+        node.int_attr("ceil_mode", 0) == 0,
+        "ceil_mode=1 is unsupported"
+    );
+    require!(
+        node.int_attr("p", 2) > 0,
+        "p must be positive (got {})",
+        node.int_attr("p", 2)
+    );
     let (kernel_present, kernel) = node.ints_attr("kernel_shape");
-    if !kernel_present || kernel.len() != 2 || kernel[0] <= 0 || kernel[1] <= 0 {
-        return false;
-    }
+    require!(
+        kernel_present && kernel.len() == 2 && kernel[0] > 0 && kernel[1] > 0,
+        "kernel_shape must contain 2 positive values (got {:?})",
+        kernel
+    );
     let strides = match read_spatial_attribute(node, "strides", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("strides must contain 2 positive spatial values"),
     };
     let pads = match read_pads(node, 2) {
         Some(v) => v,
-        None => return false,
+        None => deny!("pads must contain 4 non-negative values"),
     };
     let dilations = match read_spatial_attribute(node, "dilations", 2, 1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("dilations must contain 2 positive spatial values"),
     };
-    if dilations[0] != 1 || dilations[1] != 1 {
-        return false;
-    }
+    require!(
+        dilations == [1, 1],
+        "dilated LpPool is unsupported (dilations must be [1, 1], got {:?})",
+        dilations
+    );
     let padded_h = x.shape[2] + pads[0] + pads[2];
     let padded_w = x.shape[3] + pads[1] + pads[3];
-    if padded_h < kernel[0] || padded_w < kernel[1] {
-        return false;
-    }
+    require!(
+        padded_h >= kernel[0] && padded_w >= kernel[1],
+        "padded spatial shape [{padded_h}, {padded_w}] is smaller than kernel {:?}",
+        kernel
+    );
     let expected = vec![
         x.shape[0],
         x.shape[1],
         (padded_h - kernel[0]) / strides[0] + 1,
         (padded_w - kernel[1]) / strides[1] + 1,
     ];
-    same_known_shape(&out.shape, &expected)
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?}",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
-fn global_lp_pool_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn global_lp_pool_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    is_mlx_float(x.dtype)
-        && out.dtype == x.dtype
-        && static_positive_shape_dyn_batch(&x.shape, 4)
-        && node.int_attr("p", 2) > 0
-        && same_known_shape(&out.shape, &[x.shape[0], x.shape[1], 1, 1])
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        static_positive_shape_dyn_batch(&x.shape, 4),
+        "GlobalLpPool requires rank-4 input with static positive channel/spatial dims (shape {:?}); dynamic batch is supported",
+        x.shape
+    );
+    require!(
+        node.int_attr("p", 2) > 0,
+        "p must be positive (got {})",
+        node.int_attr("p", 2)
+    );
+    let expected = [x.shape[0], x.shape[1], 1, 1];
+    require!(
+        same_known_shape(&out.shape, &expected),
+        "output shape {:?} does not match expected {:?}",
+        out.shape,
+        expected
+    );
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------

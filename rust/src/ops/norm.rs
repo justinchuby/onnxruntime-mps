@@ -15,9 +15,12 @@
 //! matching-dtype epsilon scalar so no unwanted upcast occurs.
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
-use crate::registry::{is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
+use crate::registry::{
+    is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+};
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 use std::os::raw::c_char;
 
 // ---- small local MLX helpers -------------------------------------------------------------------
@@ -30,16 +33,32 @@ fn empty_array() -> mlx::mlx_array {
     }
 }
 
-fn mul(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn mul(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_multiply, a, b)
 }
-fn add(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn add(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_add, a, b)
 }
-fn sub(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn sub(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_subtract, a, b)
 }
-fn divide(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn divide(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_divide, a, b)
 }
 fn rsqrt(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
@@ -51,19 +70,38 @@ fn sqrt(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::mlx_arra
 fn abs(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_abs(res, a, s) })
 }
-fn sum_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, axis: i32, keepdims: bool) -> Result<mlx::mlx_array, MlxError> {
+fn sum_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    axis: i32,
+    keepdims: bool,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_sum_axis(res, a, axis, keepdims, s) })
 }
-fn mean_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, axis: i32, keepdims: bool) -> Result<mlx::mlx_array, MlxError> {
+fn mean_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    axis: i32,
+    keepdims: bool,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_mean_axis(res, a, axis, keepdims, s) })
 }
-fn var_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, axis: i32, keepdims: bool) -> Result<mlx::mlx_array, MlxError> {
+fn var_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    axis: i32,
+    keepdims: bool,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_var_axis(res, a, axis, keepdims, 0, s) })
 }
 
 /// A 0-d scalar of dtype `dt` holding `v` (eps constant), matching the compute dtype so no unwanted
 /// upcast occurs.
-fn scalar_like(ctx: &mut TranslationContext, v: f32, dt: mlx::mlx_dtype) -> Result<mlx::mlx_array, MlxError> {
+fn scalar_like(
+    ctx: &mut TranslationContext,
+    v: f32,
+    dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.scalar_f32(v);
     if dt == mlx::mlx_dtype__MLX_FLOAT32 {
         Ok(s)
@@ -73,7 +111,12 @@ fn scalar_like(ctx: &mut TranslationContext, v: f32, dt: mlx::mlx_dtype) -> Resu
 }
 
 /// Reshape a per-channel vector `[C]` to `[1, C, 1, ..., 1]` so it broadcasts over N and spatial.
-fn channel_broadcast(ctx: &mut TranslationContext, v: mlx::mlx_array, rank: usize, channels: i32) -> Result<mlx::mlx_array, MlxError> {
+fn channel_broadcast(
+    ctx: &mut TranslationContext,
+    v: mlx::mlx_array,
+    rank: usize,
+    channels: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let mut shape = vec![1i32; rank];
     if rank >= 2 {
         shape[1] = channels;
@@ -147,7 +190,8 @@ fn skip_layer_norm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), 
         residual = add(ctx, residual, bias)?;
     }
     let eps = epsilon(n, 1e-5);
-    let r = ctx.emit(|res, s| unsafe { mlx::mlx_fast_layer_norm(res, residual, gamma, beta, eps, s) })?;
+    let r =
+        ctx.emit(|res, s| unsafe { mlx::mlx_fast_layer_norm(res, residual, gamma, beta, eps, s) })?;
     ctx.mark_fast("mlx_fast_layer_norm");
     ctx.bind(&n.outputs[0], r);
     if n.outputs.len() >= 4 && !n.outputs[3].name.is_empty() {
@@ -164,7 +208,8 @@ fn skip_rms_norm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), Ml
     let gamma = ctx.resolve(&n.inputs[2])?;
     let eps = epsilon(n, 1e-6);
     let residual = add(ctx, input, skip)?;
-    let norm = ctx.emit(|res, s| unsafe { mlx::mlx_fast_rms_norm(res, residual, gamma, eps, s) })?;
+    let norm =
+        ctx.emit(|res, s| unsafe { mlx::mlx_fast_rms_norm(res, residual, gamma, eps, s) })?;
     ctx.mark_fast("mlx_fast_rms_norm");
     ctx.bind(&n.outputs[0], norm);
     if n.outputs.len() >= 2 {
@@ -210,7 +255,9 @@ fn group_norm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxEr
     let bb = channel_broadcast(ctx, bias, rank, c)?;
     let scaled = mul(ctx, normed, sb)?;
     let out = add(ctx, scaled, bb)?;
-    ctx.mark_composed("GroupNormalization composed (mean/var/rsqrt) — no fused last-axis norm kernel");
+    ctx.mark_composed(
+        "GroupNormalization composed (mean/var/rsqrt) — no fused last-axis norm kernel",
+    );
     ctx.bind(&n.outputs[0], out);
     Ok(())
 }
@@ -309,7 +356,12 @@ fn pad_channel(
 }
 
 /// Slice `a` along the channel axis (axis 1) to `[lo, hi)`, keeping all other axes intact.
-fn slice_channel(ctx: &mut TranslationContext, a: mlx::mlx_array, lo: i32, hi: i32) -> Result<mlx::mlx_array, MlxError> {
+fn slice_channel(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    lo: i32,
+    hi: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let shape = ctx.shape_of(a);
     let rank = shape.len();
     let mut start = vec![0i32; rank];
@@ -380,204 +432,356 @@ fn tensor_dtype(node: &NodeView, i: usize) -> Option<ort::ONNXTensorElementDataT
 }
 
 /// RMSNormalization (ai.onnx): X, scale, axis == -1. fp32/fp16/bf16 (mlx_fast_rms_norm is generic).
-fn rms_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() == 0 {
-        return false;
-    }
-    let (x, g, out) = match (node.input_info(0), tensor_dtype(node, 1), node.output_info(0)) {
+fn rms_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() > 0,
+        "expects 2 inputs and at least 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (x, g, out) = match (
+        node.input_info(0),
+        tensor_dtype(node, 1),
+        node.output_info(0),
+    ) {
         (Some(x), Some(g), Some(o)) => (x, g, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the first output"),
     };
-    if !is_mlx_float(x.dtype) || g != x.dtype || out.dtype != x.dtype {
-        return false;
-    }
-    node.int_attr("axis", -1) == -1
+    require!(
+        is_mlx_float(x.dtype) && g == x.dtype && out.dtype == x.dtype,
+        "X, scale, and output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(g),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    let axis = node.int_attr("axis", -1);
+    require!(axis == -1, "only axis=-1 is supported (got {axis})");
+    Ok(())
 }
 
 /// SimplifiedLayerNormalization (com.microsoft): X + scale, last-axis, single output.
-fn simplified_layer_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
-    let (x, g, out) = match (node.input_info(0), tensor_dtype(node, 1), node.output_info(0)) {
+fn simplified_layer_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    let (x, g, out) = match (
+        node.input_info(0),
+        tensor_dtype(node, 1),
+        node.output_info(0),
+    ) {
         (Some(x), Some(g), Some(o)) => (x, g, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(x.dtype) || g != x.dtype || out.dtype != x.dtype || x.shape.is_empty() {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && g == x.dtype && out.dtype == x.dtype,
+        "X, scale, and output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(g),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
     let axis = node.int_attr("axis", -1);
-    axis == -1 || axis == x.shape.len() as i64 - 1
+    require!(
+        axis == -1 || axis == x.shape.len() as i64 - 1,
+        "only the last axis is supported (got axis={axis} for rank {})",
+        x.shape.len()
+    );
+    Ok(())
 }
 
 /// LayerNormalization: fp32/fp16/bf16 X + scale (+ optional bias), last-axis, single output (Y).
-fn layer_norm_claim(node: &NodeView) -> bool {
+fn layer_norm_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 2 || nin > 3 || node.num_outputs() != 1 {
-        return false;
-    }
-    let (x, scale, out) = match (node.input_info(0), tensor_dtype(node, 1), node.output_info(0)) {
+    require!(
+        (2..=3).contains(&nin) && node.num_outputs() == 1,
+        "expects 2-3 inputs and 1 output, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
+    let (x, scale, out) = match (
+        node.input_info(0),
+        tensor_dtype(node, 1),
+        node.output_info(0),
+    ) {
         (Some(x), Some(scale), Some(o)) => (x, scale, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, scale, or output"),
     };
-    if !is_mlx_float(x.dtype) || scale != x.dtype || out.dtype != x.dtype {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && scale == x.dtype && out.dtype == x.dtype,
+        "X, scale, and output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(scale),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     if nin == 3 && node.input_present(2) {
-        match tensor_dtype(node, 2) {
-            Some(bias) if bias == x.dtype => {}
-            _ => return false,
-        }
+        let bias = match tensor_dtype(node, 2) {
+            Some(bias) => bias,
+            None => deny!("missing tensor type/shape info on bias"),
+        };
+        require!(
+            bias == x.dtype,
+            "bias must match X dtype {}, got {}",
+            crate::registry::ort_dtype_name(x.dtype),
+            crate::registry::ort_dtype_name(bias)
+        );
     }
     let rank = x.shape.len() as i64;
+    require!(rank > 0, "input must have rank >= 1 (got a scalar)");
     let axis = node.int_attr("axis", -1);
-    rank > 0 && (axis == -1 || axis == rank - 1)
+    require!(
+        axis == -1 || axis == rank - 1,
+        "only the last axis is supported (got axis={axis} for rank {rank})"
+    );
+    Ok(())
 }
 
 /// SkipSimplifiedLayerNormalization (com.microsoft): input, skip, gamma. fp32/fp16/bf16. 3-input.
-fn skip_rms_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() == 0 {
-        return false;
-    }
+fn skip_rms_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() > 0,
+        "expects 3 inputs and at least 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X or the first output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "X and output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     // The handler produces only out[0] (normalized) and the optional out[last] (residual sum);
     // reject if mean (out[1]) or inv-std (out[2]) are requested — mlx_fast_rms_norm doesn't compute
     // them, so claiming would leave those outputs unbound (mirrors skip_layer_norm_claim).
-    if node.output_present(1) || node.output_present(2) {
-        return false;
+    require!(
+        !node.output_present(1) && !node.output_present(2),
+        "mean/inv-std outputs are unsupported; only normalized output and optional residual sum are produced"
+    );
+    for (i, name) in [(1, "skip"), (2, "gamma")] {
+        let dtype = match tensor_dtype(node, i) {
+            Some(dtype) => dtype,
+            None => deny!("missing tensor type/shape info on {name} input"),
+        };
+        require!(
+            dtype == x.dtype,
+            "{name} must match X dtype {}, got {}",
+            crate::registry::ort_dtype_name(x.dtype),
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
-    matches!(tensor_dtype(node, 1), Some(t) if t == x.dtype)
-        && matches!(tensor_dtype(node, 2), Some(t) if t == x.dtype)
+    Ok(())
 }
 
 /// SkipLayerNormalization: input, skip, gamma (+ optional beta, bias), all same float dtype.
 /// Only out[0] (Y) and optional out[3] (residual sum) are produced; mean/inv-std outputs → CPU.
-fn skip_layer_norm_claim(node: &NodeView) -> bool {
+fn skip_layer_norm_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if nin < 3 || nin > 5 || node.num_outputs() == 0 {
-        return false;
-    }
+    require!(
+        (3..=5).contains(&nin) && node.num_outputs() > 0,
+        "expects 3-5 inputs and at least 1 output, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X or the first output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "X and output must share one float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     for i in 1..nin {
         if !node.input_present(i) {
             continue;
         }
-        match tensor_dtype(node, i) {
-            Some(t) if t == x.dtype => {}
-            _ => return false,
-        }
+        let dtype = match tensor_dtype(node, i) {
+            Some(dtype) => dtype,
+            None => deny!("missing tensor type/shape info on input {i}"),
+        };
+        require!(
+            dtype == x.dtype,
+            "input {i} must match X dtype {}, got {}",
+            crate::registry::ort_dtype_name(x.dtype),
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
     // Reject if mean (out[1]) or inv-std (out[2]) are requested — we do not compute them.
-    if node.output_present(1) || node.output_present(2) {
-        return false;
-    }
-    true
+    require!(
+        !node.output_present(1) && !node.output_present(2),
+        "mean/inv-std outputs are unsupported; only normalized output and optional residual sum are produced"
+    );
+    Ok(())
 }
 
 /// GroupNormalization: X=[N,C,*S] float, scale/bias=[C], static C divisible by num_groups.
-fn group_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn group_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, scale, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(scale), Some(o)) => (x, scale, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X, scale, or output"),
     };
     let bias = match tensor_dtype(node, 2) {
         Some(b) => b,
-        None => return false,
+        None => deny!("missing tensor type/shape info on bias"),
     };
-    if !is_mlx_float(x.dtype) || scale.dtype != x.dtype || bias != x.dtype || out.dtype != x.dtype {
-        return false;
-    }
-    if x.shape.len() < 2 {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype)
+            && scale.dtype == x.dtype
+            && bias == x.dtype
+            && out.dtype == x.dtype,
+        "X, scale, bias, and output must share one float dtype (fp32/fp16/bf16), got {}, {}, {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(scale.dtype),
+        crate::registry::ort_dtype_name(bias),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() >= 2,
+        "input must have rank >= 2 (got rank {})",
+        x.shape.len()
+    );
     let c = x.shape[1];
-    if c <= 0 {
-        return false;
-    }
-    for &d in &x.shape {
-        if d <= 0 {
-            return false; // need static dims to build the group reshape
-        }
-    }
+    require!(
+        c > 0,
+        "channel dimension must be static and positive (got {c})"
+    );
+    require!(
+        x.shape.iter().all(|&d| d > 0),
+        "all input dimensions must be static and positive to build the group reshape (got {:?})",
+        x.shape
+    );
     let groups = node.int_attr("num_groups", 0);
-    if groups <= 0 || c % groups != 0 {
-        return false;
-    }
+    require!(
+        groups > 0 && c % groups == 0,
+        "num_groups must be positive and divide channel count {c} (got {groups})"
+    );
     // opset-21 per-channel scale/bias: shape [C].
-    scale.shape.len() == 1 && scale.shape[0] == c
+    require!(
+        scale.shape.len() == 1 && scale.shape[0] == c,
+        "opset-21 scale must have shape [C]=[{c}] (got {:?})",
+        scale.shape
+    );
+    Ok(())
 }
 
 /// LpNormalization: single float input/output, p in {1,2}.
-fn lp_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn lp_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || x.shape.is_empty() {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must be the same float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
     let p = node.int_attr("p", 2);
-    p == 1 || p == 2
+    require!(p == 1 || p == 2, "only p=1 or p=2 is supported (got {p})");
+    Ok(())
 }
 
 /// BatchNormalization: inference (single-output) form, 5 float inputs sharing X's dtype.
-fn batch_norm_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 5 || node.num_outputs() != 1 {
-        return false; // training outputs → CPU
-    }
+fn batch_norm_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 5 && node.num_outputs() == 1,
+        "inference form expects 5 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on X or output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || x.shape.len() < 2 {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "X/output must be the same float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() >= 2,
+        "input must have rank >= 2 (got rank {})",
+        x.shape.len()
+    );
     for i in 1..5 {
-        match tensor_dtype(node, i) {
-            Some(t) if t == x.dtype => {}
-            _ => return false,
-        }
+        let dtype = match tensor_dtype(node, i) {
+            Some(dtype) => dtype,
+            None => deny!("missing tensor type/shape info on input {i}"),
+        };
+        require!(
+            dtype == x.dtype,
+            "input {i} must match X dtype {}, got {}",
+            crate::registry::ort_dtype_name(x.dtype),
+            crate::registry::ort_dtype_name(dtype)
+        );
     }
-    node.int_attr("training_mode", 0) == 0
+    let training_mode = node.int_attr("training_mode", 0);
+    require!(
+        training_mode == 0,
+        "training_mode must be 0; training outputs are unsupported (got {training_mode})"
+    );
+    Ok(())
 }
 
 /// LRN (ai.onnx, across-channel): single float input/output of equal dtype, static shape with a
 /// channel axis, and a valid window `size >= 1`.
-fn lrn_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn lrn_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(o)) => (x, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || x.shape.len() < 2 {
-        return false;
-    }
-    for &d in &x.shape {
-        if d <= 0 {
-            return false; // need static dims to build the channel pad/slice
-        }
-    }
-    node.int_attr("size", 0) >= 1
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype,
+        "input/output must be the same float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() >= 2,
+        "input must have rank >= 2 (got rank {})",
+        x.shape.len()
+    );
+    require!(
+        x.shape.iter().all(|&d| d > 0),
+        "all input dimensions must be static and positive to build channel pad/slice (got {:?})",
+        x.shape
+    );
+    let size = node.int_attr("size", 0);
+    require!(size >= 1, "window size must be >= 1 (got {size})");
+    Ok(())
 }
 
 // ---- registration ------------------------------------------------------------------------------
@@ -603,14 +807,70 @@ fn reg(
 
 pub fn register_norm(registry: &mut OpRegistry) {
     // RMSNormalization entered ai.onnx at opset 23.
-    reg(registry, "", "RMSNormalization", 23, rms_norm_op, rms_norm_claim);
+    reg(
+        registry,
+        "",
+        "RMSNormalization",
+        23,
+        rms_norm_op,
+        rms_norm_claim,
+    );
     // LayerNormalization entered ai.onnx at opset 17.
-    reg(registry, "", "LayerNormalization", 17, layer_norm_op, layer_norm_claim);
-    reg(registry, "", "GroupNormalization", K_ANY_OPSET, group_norm_op, group_norm_claim);
-    reg(registry, "", "LpNormalization", K_ANY_OPSET, lp_norm_op, lp_norm_claim);
-    reg(registry, "", "BatchNormalization", K_ANY_OPSET, batch_norm_op, batch_norm_claim);
+    reg(
+        registry,
+        "",
+        "LayerNormalization",
+        17,
+        layer_norm_op,
+        layer_norm_claim,
+    );
+    reg(
+        registry,
+        "",
+        "GroupNormalization",
+        K_ANY_OPSET,
+        group_norm_op,
+        group_norm_claim,
+    );
+    reg(
+        registry,
+        "",
+        "LpNormalization",
+        K_ANY_OPSET,
+        lp_norm_op,
+        lp_norm_claim,
+    );
+    reg(
+        registry,
+        "",
+        "BatchNormalization",
+        K_ANY_OPSET,
+        batch_norm_op,
+        batch_norm_claim,
+    );
     reg(registry, "", "LRN", K_ANY_OPSET, lrn_op, lrn_claim);
-    reg(registry, "com.microsoft", "SimplifiedLayerNormalization", K_ANY_OPSET, simplified_layer_norm_op, simplified_layer_norm_claim);
-    reg(registry, "com.microsoft", "SkipLayerNormalization", K_ANY_OPSET, skip_layer_norm_op, skip_layer_norm_claim);
-    reg(registry, "com.microsoft", "SkipSimplifiedLayerNormalization", K_ANY_OPSET, skip_rms_norm_op, skip_rms_norm_claim);
+    reg(
+        registry,
+        "com.microsoft",
+        "SimplifiedLayerNormalization",
+        K_ANY_OPSET,
+        simplified_layer_norm_op,
+        simplified_layer_norm_claim,
+    );
+    reg(
+        registry,
+        "com.microsoft",
+        "SkipLayerNormalization",
+        K_ANY_OPSET,
+        skip_layer_norm_op,
+        skip_layer_norm_claim,
+    );
+    reg(
+        registry,
+        "com.microsoft",
+        "SkipSimplifiedLayerNormalization",
+        K_ANY_OPSET,
+        skip_rms_norm_op,
+        skip_rms_norm_claim,
+    );
 }

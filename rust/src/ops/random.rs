@@ -7,11 +7,12 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::{mlx_dtype_from_onnx, MlxError, NodeDesc, TranslationContext};
 use crate::mlx::{Array, VectorArray};
 use crate::registry::{
-    is_mlx_float, is_mlx_supported, ClaimPredicate, NodeView, OpHandler, OpRegistration, OpRegistry,
-    K_ANY_OPSET,
+    is_mlx_float, is_mlx_supported, ClaimPredicate, ClaimResult, NodeView, OpHandler,
+    OpRegistration, OpRegistry, K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- handlers -----------------------------------------------------------------------------------
 
@@ -37,7 +38,11 @@ fn attr_shape(n: &NodeDesc) -> Vec<i32> {
         .unwrap_or_default()
 }
 
-fn random_normal_with_shape(ctx: &mut TranslationContext, n: &NodeDesc, shape: Vec<i32>) -> Result<(), MlxError> {
+fn random_normal_with_shape(
+    ctx: &mut TranslationContext,
+    n: &NodeDesc,
+    shape: Vec<i32>,
+) -> Result<(), MlxError> {
     let key = random_key(ctx, n);
     let dtype = mlx_dtype_from_onnx(n.outputs[0].otype);
     let mean = n.floats.get("mean").copied().unwrap_or(0.0);
@@ -59,7 +64,11 @@ fn random_normal_like_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(
     random_normal_with_shape(ctx, n, shape)
 }
 
-fn random_uniform_with_shape(ctx: &mut TranslationContext, n: &NodeDesc, shape: Vec<i32>) -> Result<(), MlxError> {
+fn random_uniform_with_shape(
+    ctx: &mut TranslationContext,
+    n: &NodeDesc,
+    shape: Vec<i32>,
+) -> Result<(), MlxError> {
     let low = ctx.scalar_f32(n.floats.get("low").copied().unwrap_or(0.0));
     let high = ctx.scalar_f32(n.floats.get("high").copied().unwrap_or(1.0));
     let key = random_key(ctx, n);
@@ -165,122 +174,249 @@ fn shapes_compatible(a: &[i64], b: &[i64]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).all(|(&x, &y)| x < 0 || y < 0 || x == y)
+    a.iter()
+        .zip(b.iter())
+        .all(|(&x, &y)| x < 0 || y < 0 || x == y)
 }
 
-fn random_shape_claim(node: &NodeView, normal: bool) -> bool {
-    if node.num_inputs() != 0 || node.num_outputs() != 1 || !optional_seed_supported(node) {
-        return false;
-    }
+fn random_shape_claim(node: &NodeView, normal: bool) -> ClaimResult {
+    require!(
+        node.num_inputs() == 0 && node.num_outputs() == 1,
+        "expects 0 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        optional_seed_supported(node),
+        "seed must be a finite non-negative float representable as u64"
+    );
     let out = match node.output_info(0) {
         Some(o) => o,
-        None => return false,
+        None => deny!("missing tensor type/shape info on output"),
     };
-    if !is_random_float(out.dtype) {
-        return false;
-    }
-    let dtype_attr = node.int_attr("dtype", ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT as i64);
-    if dtype_attr != out.dtype as i64 {
-        return false;
-    }
+    require!(
+        is_random_float(out.dtype),
+        "output dtype must be float32 or float16, got {}",
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    let dtype_attr = node.int_attr(
+        "dtype",
+        ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT as i64,
+    );
+    require!(
+        dtype_attr == out.dtype as i64,
+        "dtype attribute {} must match output dtype {}",
+        crate::registry::ort_dtype_name(dtype_attr as ort::ONNXTensorElementDataType),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     let (present, attr_shape) = node.ints_attr("shape");
-    if !present || !valid_shape(&attr_shape) || out.shape != attr_shape {
-        return false;
-    }
+    require!(present, "shape attribute is required");
+    require!(
+        valid_shape(&attr_shape),
+        "shape dimensions must be in 0..=i32::MAX (got {:?})",
+        attr_shape
+    );
+    require!(
+        out.shape == attr_shape,
+        "shape attribute {:?} must match output shape {:?}",
+        attr_shape,
+        out.shape
+    );
     if normal {
         let mean = node.float_attr_opt("mean").unwrap_or(0.0);
         let scale = node.float_attr_opt("scale").unwrap_or(1.0);
-        mean.is_finite() && scale.is_finite() && scale >= 0.0
+        require!(
+            mean.is_finite() && scale.is_finite() && scale >= 0.0,
+            "mean must be finite and scale finite/non-negative (got mean={mean}, scale={scale})"
+        );
     } else {
         let low = node.float_attr_opt("low").unwrap_or(0.0);
         let high = node.float_attr_opt("high").unwrap_or(1.0);
-        low.is_finite() && high.is_finite() && low < high
+        require!(
+            low.is_finite() && high.is_finite() && low < high,
+            "low/high must be finite with low < high (got low={low}, high={high})"
+        );
     }
+    Ok(())
 }
 
-fn random_normal_claim(node: &NodeView) -> bool {
+fn random_normal_claim(node: &NodeView) -> ClaimResult {
     random_shape_claim(node, true)
 }
 
-fn random_uniform_claim(node: &NodeView) -> bool {
+fn random_uniform_claim(node: &NodeView) -> ClaimResult {
     random_shape_claim(node, false)
 }
 
-fn random_like_claim(node: &NodeView, normal: bool) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 || !optional_seed_supported(node) {
-        return false;
-    }
+fn random_like_claim(node: &NodeView, normal: bool) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        optional_seed_supported(node),
+        "seed must be a finite non-negative float representable as u64"
+    );
     let (inp, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_supported(inp.dtype) || !is_random_float(out.dtype) {
-        return false;
-    }
-    if node.int_attr("dtype", inp.dtype as i64) != out.dtype as i64 {
-        return false;
-    }
-    if !shapes_compatible(&inp.shape, &out.shape) {
-        return false;
-    }
+    require!(
+        is_mlx_supported(inp.dtype),
+        "input dtype {} is not supported by MLX",
+        crate::registry::ort_dtype_name(inp.dtype)
+    );
+    require!(
+        is_random_float(out.dtype),
+        "output dtype must be float32 or float16, got {}",
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    let dtype_attr = node.int_attr("dtype", inp.dtype as i64);
+    require!(
+        dtype_attr == out.dtype as i64,
+        "dtype attribute {} must match output dtype {}",
+        crate::registry::ort_dtype_name(dtype_attr as ort::ONNXTensorElementDataType),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        shapes_compatible(&inp.shape, &out.shape),
+        "input/output shapes must be compatible, got {:?} -> {:?}",
+        inp.shape,
+        out.shape
+    );
     if normal {
         let mean = node.float_attr_opt("mean").unwrap_or(0.0);
         let scale = node.float_attr_opt("scale").unwrap_or(1.0);
-        mean.is_finite() && scale.is_finite() && scale >= 0.0
+        require!(
+            mean.is_finite() && scale.is_finite() && scale >= 0.0,
+            "mean must be finite and scale finite/non-negative (got mean={mean}, scale={scale})"
+        );
     } else {
         let low = node.float_attr_opt("low").unwrap_or(0.0);
         let high = node.float_attr_opt("high").unwrap_or(1.0);
-        low.is_finite() && high.is_finite() && low < high
+        require!(
+            low.is_finite() && high.is_finite() && low < high,
+            "low/high must be finite with low < high (got low={low}, high={high})"
+        );
     }
+    Ok(())
 }
 
-fn random_normal_like_claim(node: &NodeView) -> bool {
+fn random_normal_like_claim(node: &NodeView) -> ClaimResult {
     random_like_claim(node, true)
 }
 
-fn random_uniform_like_claim(node: &NodeView) -> bool {
+fn random_uniform_like_claim(node: &NodeView) -> ClaimResult {
     random_like_claim(node, false)
 }
 
-fn bernoulli_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 || !optional_seed_supported(node) {
-        return false;
-    }
+fn bernoulli_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        optional_seed_supported(node),
+        "seed must be a finite non-negative float representable as u64"
+    );
     let (inp, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    is_random_float(inp.dtype)
-        && is_boundary_type(out.dtype)
-        && node.int_attr("dtype", inp.dtype as i64) == out.dtype as i64
-        && shapes_compatible(&inp.shape, &out.shape)
+    require!(
+        is_random_float(inp.dtype),
+        "probability input dtype must be float32 or float16, got {}",
+        crate::registry::ort_dtype_name(inp.dtype)
+    );
+    require!(
+        is_boundary_type(out.dtype),
+        "output dtype {} is unsupported",
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    let dtype_attr = node.int_attr("dtype", inp.dtype as i64);
+    require!(
+        dtype_attr == out.dtype as i64,
+        "dtype attribute {} must match output dtype {}",
+        crate::registry::ort_dtype_name(dtype_attr as ort::ONNXTensorElementDataType),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        shapes_compatible(&inp.shape, &out.shape),
+        "input/output shapes must be compatible, got {:?} -> {:?}",
+        inp.shape,
+        out.shape
+    );
+    Ok(())
 }
 
-fn multinomial_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 || !optional_seed_supported(node) {
-        return false;
-    }
+fn multinomial_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        optional_seed_supported(node),
+        "seed must be a finite non-negative float representable as u64"
+    );
     let (inp, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
     let sample_size = node.int_attr("sample_size", 1);
-    if !is_random_float(inp.dtype) {
-        return false;
-    }
-    if out.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
-        && out.dtype != ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
-    {
-        return false;
-    }
-    if node.int_attr("dtype", ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 as i64) != out.dtype as i64 {
-        return false;
-    }
-    if inp.shape.len() != 2 || out.shape.len() != 2 || inp.shape[1] <= 0 || sample_size <= 0 || sample_size > i32::MAX as i64 {
-        return false;
-    }
-    (inp.shape[0] < 0 || out.shape[0] < 0 || inp.shape[0] == out.shape[0])
-        && (out.shape[1] < 0 || out.shape[1] == sample_size)
+    require!(
+        is_random_float(inp.dtype),
+        "input dtype must be float32 or float16, got {}",
+        crate::registry::ort_dtype_name(inp.dtype)
+    );
+    require!(
+        out.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+            || out.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64,
+        "output dtype must be int32 or int64, got {}",
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    let dtype_attr = node.int_attr(
+        "dtype",
+        ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 as i64,
+    );
+    require!(
+        dtype_attr == out.dtype as i64,
+        "dtype attribute {} must match output dtype {}",
+        crate::registry::ort_dtype_name(dtype_attr as ort::ONNXTensorElementDataType),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        inp.shape.len() == 2 && out.shape.len() == 2,
+        "input/output must both have rank 2, got rank {} -> {}",
+        inp.shape.len(),
+        out.shape.len()
+    );
+    require!(
+        inp.shape[1] > 0,
+        "class dimension must be static and positive (got {})",
+        inp.shape[1]
+    );
+    require!(
+        sample_size > 0 && sample_size <= i32::MAX as i64,
+        "sample_size must be in 1..=i32::MAX (got {sample_size})"
+    );
+    require!(
+        inp.shape[0] < 0 || out.shape[0] < 0 || inp.shape[0] == out.shape[0],
+        "batch dimensions must match, got {} -> {}",
+        inp.shape[0],
+        out.shape[0]
+    );
+    require!(
+        out.shape[1] < 0 || out.shape[1] == sample_size,
+        "output sample dimension must equal sample_size {sample_size}, got {}",
+        out.shape[1]
+    );
+    Ok(())
 }
 
 fn parse_einsum(raw: &str) -> Option<(Vec<String>, String)> {
@@ -303,7 +439,8 @@ fn parse_einsum(raw: &str) -> Option<(Vec<String>, String)> {
     }
     let simple = |t: &str| -> bool {
         let mut seen = HashSet::new();
-        t.chars().all(|c| ('a'..='z').contains(&c) && seen.insert(c))
+        t.chars()
+            .all(|c| ('a'..='z').contains(&c) && seen.insert(c))
     };
     if !simple(&output) || !terms.iter().all(|t| simple(t)) {
         return None;
@@ -311,39 +448,65 @@ fn parse_einsum(raw: &str) -> Option<(Vec<String>, String)> {
     Some((terms, output))
 }
 
-fn einsum_claim(node: &NodeView) -> bool {
+fn einsum_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni == 0 || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        ni > 0 && node.num_outputs() == 1,
+        "expects at least 1 input and exactly 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
     let equation = node.string_attr("equation", "");
-    if !node.has_attr("equation") || equation.is_empty() {
-        return false;
-    }
+    require!(
+        node.has_attr("equation") && !equation.is_empty(),
+        "non-empty equation attribute is required"
+    );
     let (input_terms, output_term) = match parse_einsum(&equation) {
         Some(v) => v,
-        None => return false,
+        None => deny!(
+            "equation must use explicit -> output, lowercase labels only, and no repeated label within a term (got {equation:?})"
+        ),
     };
-    if input_terms.len() != ni {
-        return false;
-    }
+    require!(
+        input_terms.len() == ni,
+        "equation has {} input terms but node has {ni} inputs",
+        input_terms.len()
+    );
     let (in0, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on first input or output"),
     };
     let dtype = in0.dtype;
-    if !is_random_float(dtype) || out.dtype != dtype || out.shape.len() != output_term.len() {
-        return false;
-    }
+    require!(
+        is_random_float(dtype) && out.dtype == dtype,
+        "all tensors must share float32 or float16 dtype, got first input {} and output {}",
+        crate::registry::ort_dtype_name(dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        out.shape.len() == output_term.len(),
+        "output rank {} must match equation output term length {}",
+        out.shape.len(),
+        output_term.len()
+    );
     let mut dims: HashMap<char, i64> = HashMap::new();
     for i in 0..ni {
         let info = match node.input_info(i) {
             Some(x) => x,
-            None => return false,
+            None => deny!("missing tensor type/shape info on input {i}"),
         };
-        if info.dtype != dtype || info.shape.len() != input_terms[i].len() {
-            return false;
-        }
+        require!(
+            info.dtype == dtype,
+            "input {i} dtype must match {}, got {}",
+            crate::registry::ort_dtype_name(dtype),
+            crate::registry::ort_dtype_name(info.dtype)
+        );
+        require!(
+            info.shape.len() == input_terms[i].len(),
+            "input {i} rank {} must match equation term length {}",
+            info.shape.len(),
+            input_terms[i].len()
+        );
         for (axis, label) in input_terms[i].chars().enumerate() {
             let d = info.shape[axis];
             match dims.get(&label).copied() {
@@ -351,9 +514,10 @@ fn einsum_claim(node: &NodeView) -> bool {
                     dims.insert(label, d);
                 }
                 Some(existing) => {
-                    if existing >= 0 && d >= 0 && existing != d {
-                        return false;
-                    }
+                    require!(
+                        existing < 0 || d < 0 || existing == d,
+                        "label {label:?} has incompatible dimensions {existing} and {d}"
+                    );
                     if existing < 0 && d >= 0 {
                         dims.insert(label, d);
                     }
@@ -363,16 +527,26 @@ fn einsum_claim(node: &NodeView) -> bool {
     }
     for (axis, label) in output_term.chars().enumerate() {
         match dims.get(&label).copied() {
-            Some(d) if !(d >= 0 && out.shape[axis] >= 0 && d != out.shape[axis]) => {}
-            _ => return false,
+            Some(d) => require!(
+                d < 0 || out.shape[axis] < 0 || d == out.shape[axis],
+                "output label {label:?} dimension {} does not match inferred dimension {d}",
+                out.shape[axis]
+            ),
+            None => deny!("output label {label:?} does not appear in any input term"),
         }
     }
-    true
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------
 
-fn reg(registry: &mut OpRegistry, op_type: &'static str, min_opset: i32, handler: OpHandler, claim: ClaimPredicate) {
+fn reg(
+    registry: &mut OpRegistry,
+    op_type: &'static str,
+    min_opset: i32,
+    handler: OpHandler,
+    claim: ClaimPredicate,
+) {
     registry.register(OpRegistration {
         domain: "",
         op_type,
@@ -384,11 +558,41 @@ fn reg(registry: &mut OpRegistry, op_type: &'static str, min_opset: i32, handler
 }
 
 pub fn register(registry: &mut OpRegistry) {
-    reg(registry, "RandomNormal", 1, random_normal_op, random_normal_claim);
-    reg(registry, "RandomNormalLike", 1, random_normal_like_op, random_normal_like_claim);
-    reg(registry, "RandomUniform", 1, random_uniform_op, random_uniform_claim);
-    reg(registry, "RandomUniformLike", 1, random_uniform_like_op, random_uniform_like_claim);
+    reg(
+        registry,
+        "RandomNormal",
+        1,
+        random_normal_op,
+        random_normal_claim,
+    );
+    reg(
+        registry,
+        "RandomNormalLike",
+        1,
+        random_normal_like_op,
+        random_normal_like_claim,
+    );
+    reg(
+        registry,
+        "RandomUniform",
+        1,
+        random_uniform_op,
+        random_uniform_claim,
+    );
+    reg(
+        registry,
+        "RandomUniformLike",
+        1,
+        random_uniform_like_op,
+        random_uniform_like_claim,
+    );
     reg(registry, "Bernoulli", 15, bernoulli_op, bernoulli_claim);
-    reg(registry, "Multinomial", 7, multinomial_op, multinomial_claim);
+    reg(
+        registry,
+        "Multinomial",
+        7,
+        multinomial_op,
+        multinomial_claim,
+    );
     reg(registry, "Einsum", 12, einsum_op, einsum_claim);
 }

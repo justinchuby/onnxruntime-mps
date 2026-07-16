@@ -8,10 +8,12 @@
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::registry::{
-    is_mlx_float, ClaimPredicate, NodeView, OpHandler, OpRegistration, OpRegistry, K_ANY_OPSET,
+    is_mlx_float, ClaimPredicate, ClaimResult, NodeView, OpHandler, OpRegistration, OpRegistry,
+    K_ANY_OPSET,
 };
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 const T_INT64: ort::ONNXTensorElementDataType =
     ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
@@ -24,7 +26,10 @@ fn present(n: &NodeDesc, i: usize) -> bool {
 }
 
 fn str_attr(n: &NodeDesc, name: &str, dflt: &str) -> String {
-    n.strings.get(name).cloned().unwrap_or_else(|| dflt.to_string())
+    n.strings
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| dflt.to_string())
 }
 
 fn norm_axis(axis: i64, rank: i32) -> i32 {
@@ -96,32 +101,44 @@ fn tensor_scatter_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), M
     Ok(())
 }
 
-fn tensor_scatter_claim(node: &NodeView) -> bool {
+fn tensor_scatter_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if (ni != 2 && ni != 3) || node.num_outputs() != 1 {
-        return false;
-    }
-    if node.string_attr("mode", "linear") != "linear" {
-        return false;
-    }
+    require!(
+        (ni == 2 || ni == 3) && node.num_outputs() == 1,
+        "expects 2-3 inputs and 1 output, got {}in/{}out",
+        ni,
+        node.num_outputs()
+    );
+    let mode = node.string_attr("mode", "linear");
+    require!(mode == "linear", "mode must be \"linear\", got {mode:?}");
     let (past, update, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(past.dtype) || update.dtype != past.dtype || out.dtype != past.dtype {
-        return false;
-    }
+    require!(
+        is_mlx_float(past.dtype) && update.dtype == past.dtype && out.dtype == past.dtype,
+        "past/update/output must share one float dtype, got {} / {} -> {}",
+        crate::registry::ort_dtype_name(past.dtype),
+        crate::registry::ort_dtype_name(update.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     if ni == 3 && node.input_present(2) {
         match node.input_info(2) {
             Some(wi) if wi.dtype == T_INT64 => {}
-            _ => return false,
+            Some(wi) => deny!(
+                "write_indices must be int64, got {}",
+                crate::registry::ort_dtype_name(wi.dtype)
+            ),
+            None => deny!("missing tensor type/shape info on write_indices"),
         }
         // Only batch_size == 1 is expressible as one dynamic slice.
-        if past.shape.is_empty() || past.shape[0] != 1 {
-            return false;
-        }
+        require!(
+            !past.shape.is_empty() && past.shape[0] == 1,
+            "dynamic TensorScatter requires past_cache batch size 1, got shape {:?}",
+            past.shape
+        );
     }
-    true
+    Ok(())
 }
 
 // =============================================================================================
@@ -186,42 +203,59 @@ fn causal_conv_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxE
     Ok(())
 }
 
-fn causal_conv_claim(node: &NodeView) -> bool {
+fn causal_conv_claim(node: &NodeView) -> ClaimResult {
     let ni = node.num_inputs();
-    if ni < 2 || ni > 4 {
-        return false;
-    }
+    require!(ni >= 2 && ni <= 4, "expects 2-4 inputs, got {ni}");
     let no = node.num_outputs();
-    if no == 0 || no > 2 {
-        return false;
-    }
-    if has_interior_gap(node) {
-        return false;
-    }
+    require!(no >= 1 && no <= 2, "expects 1-2 outputs, got {no}");
+    require!(
+        !has_interior_gap(node),
+        "optional inputs may only be omitted from the trailing end"
+    );
     let (input, weight) = match (node.input_info(0), node.input_info(1)) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or weight"),
     };
-    if !is_mlx_float(input.dtype) || weight.dtype != input.dtype {
-        return false;
-    }
-    if input.shape.len() != 3 || weight.shape.len() != 3 {
-        return false;
-    }
+    require!(
+        is_mlx_float(input.dtype) && weight.dtype == input.dtype,
+        "input/weight must share one float dtype, got {} / {}",
+        crate::registry::ort_dtype_name(input.dtype),
+        crate::registry::ort_dtype_name(weight.dtype)
+    );
+    require!(
+        input.shape.len() == 3 && weight.shape.len() == 3,
+        "input and weight must both be rank 3, got ranks {} and {}",
+        input.shape.len(),
+        weight.shape.len()
+    );
     if node.input_present(2) {
         match node.input_info(2) {
             Some(b) if b.dtype == input.dtype => {}
-            _ => return false,
+            Some(b) => deny!(
+                "bias dtype must match input dtype {}, got {}",
+                crate::registry::ort_dtype_name(input.dtype),
+                crate::registry::ort_dtype_name(b.dtype)
+            ),
+            None => deny!("missing tensor type/shape info on bias"),
         }
     }
     if node.input_present(3) {
         match node.input_info(3) {
             Some(p) if p.dtype == input.dtype => {}
-            _ => return false,
+            Some(p) => deny!(
+                "past_state dtype must match input dtype {}, got {}",
+                crate::registry::ort_dtype_name(input.dtype),
+                crate::registry::ort_dtype_name(p.dtype)
+            ),
+            None => deny!("missing tensor type/shape info on past_state"),
         }
     }
     let activation = node.string_attr("activation", "none");
-    activation == "none" || activation == "silu" || activation == "swish"
+    require!(
+        activation == "none" || activation == "silu" || activation == "swish",
+        "activation must be \"none\", \"silu\", or \"swish\", got {activation:?}"
+    );
+    Ok(())
 }
 
 // =============================================================================================
@@ -237,7 +271,11 @@ fn is_known_rule(rule: &str) -> bool {
     matches!(rule, "linear" | "gated" | "delta" | "gated_delta")
 }
 
-fn la_scalar(ctx: &mut TranslationContext, value: f32, dt: mlx::mlx_dtype) -> Result<mlx::mlx_array, MlxError> {
+fn la_scalar(
+    ctx: &mut TranslationContext,
+    value: f32,
+    dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.scalar_f32(value);
     if dt == mlx::mlx_dtype__MLX_FLOAT32 {
         Ok(s)
@@ -247,18 +285,36 @@ fn la_scalar(ctx: &mut TranslationContext, value: f32, dt: mlx::mlx_dtype) -> Re
 }
 
 /// From a (B, H, T, X) tensor pick time-step `t` as a (B, H, X) slab.
-fn time_slab(ctx: &mut TranslationContext, a: mlx::mlx_array, t: i32, b: i32, h: i32, x: i32) -> Result<mlx::mlx_array, MlxError> {
+fn time_slab(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    t: i32,
+    b: i32,
+    h: i32,
+    x: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.slice(a, &[0, 0, t, 0], &[b, h, t + 1, x])?;
     ctx.reshape(s, &[b, h, x])
 }
 
 /// From a (B, H, T) tensor pick time-step `t` as a (B, H) slab.
-fn time_slab2(ctx: &mut TranslationContext, a: mlx::mlx_array, t: i32, b: i32, h: i32) -> Result<mlx::mlx_array, MlxError> {
+fn time_slab2(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    t: i32,
+    b: i32,
+    h: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = ctx.slice(a, &[0, 0, t], &[b, h, t + 1])?;
     ctx.reshape(s, &[b, h])
 }
 
-fn repeat_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, repeats: i32, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn repeat_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    repeats: i32,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     if repeats == 1 {
         return Ok(a);
     }
@@ -269,8 +325,14 @@ fn linear_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
     let rule = str_attr(n, "update_rule", "gated_delta");
     let uses_decay = rule_uses_decay(&rule);
     let uses_beta = rule_uses_beta(&rule);
-    let hq = *n.ints.get("q_num_heads").ok_or("MLX LinearAttention: q_num_heads missing")? as i32;
-    let h = *n.ints.get("kv_num_heads").ok_or("MLX LinearAttention: kv_num_heads missing")? as i32;
+    let hq = *n
+        .ints
+        .get("q_num_heads")
+        .ok_or("MLX LinearAttention: q_num_heads missing")? as i32;
+    let h = *n
+        .ints
+        .get("kv_num_heads")
+        .ok_or("MLX LinearAttention: kv_num_heads missing")? as i32;
     let gqa = h / hq;
 
     let query = ctx.resolve(&n.inputs[0])?; // (B, T, Hq*d_k)
@@ -286,7 +348,11 @@ fn linear_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
     let d_v = vsh[2] / h;
 
     let scale_attr = n.floats.get("scale").copied().unwrap_or(0.0);
-    let scale = if scale_attr != 0.0 { scale_attr } else { 1.0 / (d_k as f32).sqrt() };
+    let scale = if scale_attr != 0.0 {
+        scale_attr
+    } else {
+        1.0 / (d_k as f32).sqrt()
+    };
 
     let has_past = present(n, 3);
     let mut state = if has_past {
@@ -309,7 +375,11 @@ fn linear_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
     }
 
     // 3D -> 4D (B, H, T, ·): reshape by head count, transpose heads before T, tile Q/K for GQA.
-    let to_heads = |ctx: &mut TranslationContext, a: mlx::mlx_array, heads: i32, last: i32| -> Result<mlx::mlx_array, MlxError> {
+    let to_heads = |ctx: &mut TranslationContext,
+                    a: mlx::mlx_array,
+                    heads: i32,
+                    last: i32|
+     -> Result<mlx::mlx_array, MlxError> {
         let r = ctx.reshape(a, &[b, t_len, heads, last])?;
         ctx.transpose(r, &[0, 2, 1, 3])
     };
@@ -343,7 +413,7 @@ fn linear_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
             state = ctx.mul(state, g)?;
         }
         let k_t = time_slab(ctx, k4, t, b, h, d_k)?; // (B, H, d_k)
-        // retrieval = squeeze(k_row @ state)
+                                                     // retrieval = squeeze(k_row @ state)
         let k_row = ctx.expand_dims(k_t, 2)?; // (B,H,1,d_k)
         let retrieval_m = ctx.matmul(k_row, state)?; // (B,H,1,d_v)
         let retrieval = ctx.squeeze(retrieval_m, 2)?; // (B,H,d_v)
@@ -387,48 +457,72 @@ fn linear_attention_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(),
     Ok(())
 }
 
-fn linear_attention_claim(node: &NodeView) -> bool {
-    if node.num_inputs() < 3 || node.num_outputs() == 0 {
-        return false;
-    }
+fn linear_attention_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() >= 3 && node.num_outputs() >= 1,
+        "expects at least 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let rule = node.string_attr("update_rule", "gated_delta");
-    if !is_known_rule(&rule) {
-        return false;
-    }
+    require!(is_known_rule(&rule), "unsupported update_rule {rule:?}");
     let hq = node.int_attr("q_num_heads", 0);
     let h = node.int_attr("kv_num_heads", 0);
-    if hq <= 0 || h <= 0 || h % hq != 0 {
-        return false;
-    }
+    require!(
+        hq > 0 && h > 0 && h % hq == 0,
+        "q_num_heads and kv_num_heads must be positive with kv divisible by q, got q={hq}, kv={h}"
+    );
     let (q, k, v) = match (node.input_info(0), node.input_info(1), node.input_info(2)) {
         (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on query, key, or value"),
     };
-    if !is_mlx_float(q.dtype) || k.dtype != q.dtype || v.dtype != q.dtype {
-        return false;
-    }
-    if q.shape.len() != 3 {
-        return false;
-    }
-    if q.shape[1] < 0 {
-        return false; // dynamic / symbolic T -> CPU
-    }
+    require!(
+        is_mlx_float(q.dtype) && k.dtype == q.dtype && v.dtype == q.dtype,
+        "query/key/value must share one float dtype, got {} / {} / {}",
+        crate::registry::ort_dtype_name(q.dtype),
+        crate::registry::ort_dtype_name(k.dtype),
+        crate::registry::ort_dtype_name(v.dtype)
+    );
+    require!(
+        q.shape.len() == 3,
+        "query must be rank 3, got shape {:?}",
+        q.shape
+    );
+    require!(
+        q.shape[1] >= 0,
+        "query time dimension must be static, got shape {:?}",
+        q.shape
+    );
     let float_ok = |i: usize| -> bool {
         if !node.input_present(i) {
             return true;
         }
         matches!(node.input_info(i), Some(info) if info.dtype == q.dtype)
     };
-    if !float_ok(3) || !float_ok(4) || !float_ok(5) {
-        return false;
-    }
-    if rule_uses_decay(&rule) && !node.input_present(4) {
-        return false;
-    }
-    if rule_uses_beta(&rule) && !node.input_present(5) {
-        return false;
-    }
-    true
+    require!(
+        float_ok(3),
+        "past_state dtype must match query dtype {}",
+        crate::registry::ort_dtype_name(q.dtype)
+    );
+    require!(
+        float_ok(4),
+        "decay dtype must match query dtype {}",
+        crate::registry::ort_dtype_name(q.dtype)
+    );
+    require!(
+        float_ok(5),
+        "beta dtype must match query dtype {}",
+        crate::registry::ort_dtype_name(q.dtype)
+    );
+    require!(
+        !rule_uses_decay(&rule) || node.input_present(4),
+        "update_rule {rule:?} requires the decay input"
+    );
+    require!(
+        !rule_uses_beta(&rule) || node.input_present(5),
+        "update_rule {rule:?} requires the beta input"
+    );
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------

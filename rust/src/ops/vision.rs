@@ -11,34 +11,65 @@ use std::os::raw::c_void;
 
 use crate::engine::{mlx_dtype_from_onnx, MlxError, NodeDesc, TensorRef, TranslationContext};
 use crate::mlx::{Array, VectorArray};
-use crate::registry::{is_int_index, is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
+use crate::registry::{
+    is_int_index, is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+};
 use crate::sys::mlx;
 use crate::sys::ort;
+use crate::{deny, require};
 
 // ---- translate-time helpers ---------------------------------------------------------------------
 
-fn astype(ctx: &mut TranslationContext, a: mlx::mlx_array, t: mlx::mlx_dtype) -> Result<mlx::mlx_array, MlxError> {
+fn astype(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    t: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.astype(a, t)
 }
-fn reshape(ctx: &mut TranslationContext, a: mlx::mlx_array, shape: &[i32]) -> Result<mlx::mlx_array, MlxError> {
+fn reshape(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    shape: &[i32],
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.reshape(a, shape)
 }
 fn contiguous(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
     ctx.contiguous(a)
 }
-fn add(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn add(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_add, a, b)
 }
-fn sub(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn sub(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_subtract, a, b)
 }
-fn mul(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn mul(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_multiply, a, b)
 }
-fn div(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn div(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_divide, a, b)
 }
-fn maximum(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn maximum(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.binary(mlx::mlx_maximum, a, b)
 }
 fn floor(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
@@ -80,7 +111,12 @@ fn host_i32(ctx: &mut TranslationContext, data: &[i32], shape: &[i32]) -> mlx::m
 }
 
 /// Clamp `a` to [lo, hi] (scalar bounds).
-fn clip(ctx: &mut TranslationContext, a: mlx::mlx_array, lo: f32, hi: f32) -> Result<mlx::mlx_array, MlxError> {
+fn clip(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    lo: f32,
+    hi: f32,
+) -> Result<mlx::mlx_array, MlxError> {
     let los = scalar_f(ctx, lo);
     let his = scalar_f(ctx, hi);
     ctx.emit(|res, s| unsafe { mlx::mlx_clip(res, a, los, his, s) })
@@ -97,7 +133,12 @@ fn round_away(ctx: &mut TranslationContext, a: mlx::mlx_array) -> Result<mlx::ml
 }
 
 /// 1.0 where lo <= a <= hi else 0.0 (float32) — the zeros-padding validity mask for a coordinate.
-fn in_range_mask(ctx: &mut TranslationContext, a: mlx::mlx_array, lo: f32, hi: f32) -> Result<mlx::mlx_array, MlxError> {
+fn in_range_mask(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    lo: f32,
+    hi: f32,
+) -> Result<mlx::mlx_array, MlxError> {
     let los = scalar_f(ctx, lo);
     let his = scalar_f(ctx, hi);
     let ge = ctx.binary(mlx::mlx_greater_equal, a, los)?;
@@ -106,19 +147,42 @@ fn in_range_mask(ctx: &mut TranslationContext, a: mlx::mlx_array, lo: f32, hi: f
     astype(ctx, both, mlx::mlx_dtype__MLX_FLOAT32)
 }
 
-fn broadcast_to(ctx: &mut TranslationContext, a: mlx::mlx_array, shape: &[i32]) -> Result<mlx::mlx_array, MlxError> {
+fn broadcast_to(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    shape: &[i32],
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_broadcast_to(res, a, shape.as_ptr(), shape.len(), s) })
 }
-fn take_along_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, idx: mlx::mlx_array, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn take_along_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    idx: mlx::mlx_array,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_take_along_axis(res, a, idx, axis, s) })
 }
-fn take_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, idx: mlx::mlx_array, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn take_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    idx: mlx::mlx_array,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_take_axis(res, a, idx, axis, s) })
 }
-fn matmul(ctx: &mut TranslationContext, a: mlx::mlx_array, b: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn matmul(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    b: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_matmul(res, a, b, s) })
 }
-fn slice(ctx: &mut TranslationContext, a: mlx::mlx_array, start: &[i32], stop: &[i32]) -> Result<mlx::mlx_array, MlxError> {
+fn slice(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    start: &[i32],
+    stop: &[i32],
+) -> Result<mlx::mlx_array, MlxError> {
     let stride = vec![1i32; start.len()];
     ctx.emit(|res, s| unsafe {
         mlx::mlx_slice(
@@ -134,13 +198,26 @@ fn slice(ctx: &mut TranslationContext, a: mlx::mlx_array, start: &[i32], stop: &
         )
     })
 }
-fn max_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn max_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_max_axis(res, a, axis, false, s) })
 }
-fn sum_axis(ctx: &mut TranslationContext, a: mlx::mlx_array, axis: i32) -> Result<mlx::mlx_array, MlxError> {
+fn sum_axis(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    axis: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_sum_axis(res, a, axis, false, s) })
 }
-fn where_(ctx: &mut TranslationContext, c: mlx::mlx_array, x: mlx::mlx_array, y: mlx::mlx_array) -> Result<mlx::mlx_array, MlxError> {
+fn where_(
+    ctx: &mut TranslationContext,
+    c: mlx::mlx_array,
+    x: mlx::mlx_array,
+    y: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
     ctx.emit(|res, s| unsafe { mlx::mlx_where(res, c, x, y, s) })
 }
 fn arange(ctx: &mut TranslationContext, nval: i32) -> Result<mlx::mlx_array, MlxError> {
@@ -160,14 +237,14 @@ fn scatter_add(
     vec.append(idx);
     let vraw = vec.as_raw();
     let axes0 = [0i32];
-    ctx.emit(|res, s| unsafe {
-        mlx::mlx_scatter_add(res, a, vraw, updates, axes0.as_ptr(), 1, s)
-    })
+    ctx.emit(|res, s| unsafe { mlx::mlx_scatter_add(res, a, vraw, updates, axes0.as_ptr(), 1, s) })
 }
 
 fn zeros_1d(ctx: &mut TranslationContext, n: i32) -> Result<mlx::mlx_array, MlxError> {
     let shape = [n];
-    ctx.emit(|res, s| unsafe { mlx::mlx_zeros(res, shape.as_ptr(), 1, mlx::mlx_dtype__MLX_FLOAT32, s) })
+    ctx.emit(|res, s| unsafe {
+        mlx::mlx_zeros(res, shape.as_ptr(), 1, mlx::mlx_dtype__MLX_FLOAT32, s)
+    })
 }
 
 /// Read a constant int64/int32 parameter INPUT (image_shape / block_shape / size) at translate time.
@@ -241,15 +318,31 @@ fn grid_sample_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxE
     let (hout, wout) = (gs[1], gs[2]);
     let p = hout * wout;
 
-    let mode = n.strings.get("mode").map(String::as_str).unwrap_or("linear");
-    let padding = n.strings.get("padding_mode").map(String::as_str).unwrap_or("zeros");
+    let mode = n
+        .strings
+        .get("mode")
+        .map(String::as_str)
+        .unwrap_or("linear");
+    let padding = n
+        .strings
+        .get("padding_mode")
+        .map(String::as_str)
+        .unwrap_or("zeros");
     let align = n.ints.get("align_corners").copied().unwrap_or(0) != 0;
     let nearest = mode == "nearest";
     let zeros = padding == "zeros";
 
-    let ax = if align { (ww - 1) as f32 / 2.0 } else { ww as f32 / 2.0 };
+    let ax = if align {
+        (ww - 1) as f32 / 2.0
+    } else {
+        ww as f32 / 2.0
+    };
     let bx = (ww - 1) as f32 / 2.0;
-    let ay = if align { (hh - 1) as f32 / 2.0 } else { hh as f32 / 2.0 };
+    let ay = if align {
+        (hh - 1) as f32 / 2.0
+    } else {
+        hh as f32 / 2.0
+    };
     let by = (hh - 1) as f32 / 2.0;
 
     let xf = reshape(ctx, x, &[nn, cc, hh * ww])?;
@@ -308,29 +401,47 @@ fn grid_sample_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxE
     Ok(())
 }
 
-fn grid_sample_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn grid_sample_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, g, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(g), Some(o)) => (x, g, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || !is_mlx_float(g.dtype) {
-        return false;
-    }
-    if x.shape.len() != 4 || g.shape.len() != 4 || *g.shape.last().unwrap() != 2 {
-        return false;
-    }
-    if !x.shape.iter().all(|&d| d >= 0) || !g.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype && is_mlx_float(g.dtype),
+        "input/output must share one float dtype and grid must be float, got {} / {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(g.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() == 4 && g.shape.len() == 4 && g.shape.last() == Some(&2),
+        "input must be rank 4 and grid must have shape [N,H,W,2], got {:?} and {:?}",
+        x.shape,
+        g.shape
+    );
+    require!(
+        x.shape.iter().all(|&d| d >= 0) && g.shape.iter().all(|&d| d >= 0),
+        "input and grid shapes must be static, got {:?} and {:?}",
+        x.shape,
+        g.shape
+    );
     let mode = node.string_attr("mode", "linear");
-    if mode != "linear" && mode != "bilinear" && mode != "nearest" {
-        return false;
-    }
+    require!(
+        mode == "linear" || mode == "bilinear" || mode == "nearest",
+        "mode must be \"linear\", \"bilinear\", or \"nearest\", got {mode:?}"
+    );
     let padding = node.string_attr("padding_mode", "zeros");
-    padding == "zeros" || padding == "border"
+    require!(
+        padding == "zeros" || padding == "border",
+        "padding_mode must be \"zeros\" or \"border\", got {padding:?}"
+    );
+    Ok(())
 }
 
 // =================================================================================================
@@ -378,31 +489,45 @@ fn affine_grid_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxE
     Ok(())
 }
 
-fn affine_grid_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn affine_grid_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (t, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(t), Some(o)) => (t, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on theta or output"),
     };
-    if !is_mlx_float(t.dtype) || !is_mlx_float(out.dtype) {
-        return false;
-    }
-    if !node.is_const_int_tensor(1) {
-        return false;
-    }
+    require!(
+        is_mlx_float(t.dtype) && is_mlx_float(out.dtype),
+        "theta and output must be float, got {} -> {}",
+        crate::registry::ort_dtype_name(t.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        node.is_const_int_tensor(1),
+        "size must be a constant integer initializer"
+    );
     let size = match node.read_const_ints_any(1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("size must be a constant integer initializer"),
     };
-    if size.len() != 4 {
-        return false;
-    }
-    if t.shape.len() != 3 || t.shape[1] != 2 || t.shape[2] != 3 || !t.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    size.iter().all(|&d| d >= 1)
+    require!(
+        size.len() == 4,
+        "size must contain 4 dimensions, got {size:?}"
+    );
+    require!(
+        t.shape.len() == 3 && t.shape[1] == 2 && t.shape[2] == 3 && t.shape.iter().all(|&d| d >= 0),
+        "theta must have static shape [N,2,3], got {:?}",
+        t.shape
+    );
+    require!(
+        size.iter().all(|&d| d >= 1),
+        "all size dimensions must be positive, got {size:?}"
+    );
+    Ok(())
 }
 
 // =================================================================================================
@@ -420,9 +545,21 @@ fn col2im_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError>
     let block_shape = read_const_ints(ctx, &n.inputs[2])?;
     let r = image_shape.len();
 
-    let dil = n.int_arrays.get("dilations").cloned().unwrap_or_else(|| vec![1; r]);
-    let stride = n.int_arrays.get("strides").cloned().unwrap_or_else(|| vec![1; r]);
-    let pads = n.int_arrays.get("pads").cloned().unwrap_or_else(|| vec![0; 2 * r]);
+    let dil = n
+        .int_arrays
+        .get("dilations")
+        .cloned()
+        .unwrap_or_else(|| vec![1; r]);
+    let stride = n
+        .int_arrays
+        .get("strides")
+        .cloned()
+        .unwrap_or_else(|| vec![1; r]);
+    let pads = n
+        .int_arrays
+        .get("pads")
+        .cloned()
+        .unwrap_or_else(|| vec![0; 2 * r]);
 
     let mut kk: i64 = 1;
     for d in 0..r {
@@ -518,53 +655,72 @@ fn col2im_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError>
     Ok(())
 }
 
-fn col2im_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn col2im_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "Col2Im expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (i, out) = match (node.input_info(0), node.output_info(0)) {
         (Some(i), Some(o)) => (i, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input[0] or output"),
     };
-    if !is_mlx_float(i.dtype) || out.dtype != i.dtype {
-        return false;
-    }
-    if i.shape.len() != 3 || !i.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if !node.is_const_int_tensor(1) || !node.is_const_int_tensor(2) {
-        return false;
-    }
+    require!(
+        is_mlx_float(i.dtype) && out.dtype == i.dtype,
+        "Col2Im input/output must be the same float dtype (fp32/fp16/bf16), got {} -> {}",
+        crate::registry::ort_dtype_name(i.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        i.shape.len() == 3 && i.shape.iter().all(|&d| d >= 0),
+        "Col2Im input[0] must be a static rank-3 [N,C*prod(block),L] tensor, got shape {:?}",
+        i.shape
+    );
+    require!(
+        node.is_const_int_tensor(1) && node.is_const_int_tensor(2),
+        "Col2Im `image_shape` (input 1) and `block_shape` (input 2) must be constant integer \
+         initializers; runtime values stay on CPU"
+    );
     let image_shape = match node.read_const_ints_any(1) {
         Some(v) => v,
-        None => return false,
+        None => deny!("Col2Im `image_shape` (input 1) is not a readable constant int tensor"),
     };
     let block_shape = match node.read_const_ints_any(2) {
         Some(v) => v,
-        None => return false,
+        None => deny!("Col2Im `block_shape` (input 2) is not a readable constant int tensor"),
     };
     let r = image_shape.len();
-    if r < 1 || r > 3 || block_shape.len() != r {
-        return false;
-    }
-    if !image_shape.iter().all(|&d| d >= 1) {
-        return false;
-    }
+    require!(
+        r >= 1 && r <= 3 && block_shape.len() == r,
+        "Col2Im supports 1-3 spatial dims with matching image_shape/block_shape ranks \
+         (got image rank {r}, block rank {})",
+        block_shape.len()
+    );
+    require!(
+        image_shape.iter().all(|&d| d >= 1),
+        "Col2Im `image_shape` dims must all be >= 1, got {image_shape:?}"
+    );
     let mut kk: i64 = 1;
     for &b in &block_shape {
-        if b < 1 {
-            return false;
-        }
+        require!(b >= 1, "Col2Im `block_shape` dims must all be >= 1, got {block_shape:?}");
         kk *= b;
     }
-    if kk == 0 || i.shape[1] % kk != 0 || i.shape[1] / kk < 1 {
-        return false;
-    }
+    require!(
+        kk != 0 && i.shape[1] % kk == 0 && i.shape[1] / kk >= 1,
+        "Col2Im input channels {} must be a positive multiple of prod(block_shape)={kk}",
+        i.shape[1]
+    );
     let ints_ok = |name: &str, want: usize| -> bool {
         let (present, v) = node.ints_attr(name);
         !present || v.len() == want
     };
-    ints_ok("dilations", r) && ints_ok("strides", r) && ints_ok("pads", 2 * r)
+    require!(
+        ints_ok("dilations", r) && ints_ok("strides", r) && ints_ok("pads", 2 * r),
+        "Col2Im `dilations`/`strides` must have {r} entries and `pads` {} entries (per spatial dim)",
+        2 * r
+    );
+    Ok(())
 }
 
 // =================================================================================================
@@ -572,7 +728,12 @@ fn col2im_claim(node: &NodeView) -> bool {
 // =================================================================================================
 
 /// A single [R,1] ROI column reshaped to [R].
-fn roi_column(ctx: &mut TranslationContext, rois: mlx::mlx_array, r: i32, col: i32) -> Result<mlx::mlx_array, MlxError> {
+fn roi_column(
+    ctx: &mut TranslationContext,
+    rois: mlx::mlx_array,
+    r: i32,
+    col: i32,
+) -> Result<mlx::mlx_array, MlxError> {
     let s = slice(ctx, rois, &[0, col], &[r, col + 1])?;
     reshape(ctx, s, &[r])
 }
@@ -744,10 +905,13 @@ fn roi_align_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxErr
     Ok(())
 }
 
-fn roi_align_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 3 || node.num_outputs() != 1 {
-        return false;
-    }
+fn roi_align_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 3 && node.num_outputs() == 1,
+        "expects 3 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, r, b, out) = match (
         node.input_info(0),
         node.input_info(1),
@@ -755,29 +919,50 @@ fn roi_align_claim(node: &NodeView) -> bool {
         node.output_info(0),
     ) {
         (Some(x), Some(r), Some(b), Some(o)) => (x, r, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || !is_mlx_float(r.dtype) || !is_int_index(b.dtype) {
-        return false;
-    }
-    if x.shape.len() != 4 || !x.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if r.shape.len() != 2 || r.shape[1] != 4 || !r.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if b.shape.len() != 1 || !b.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if node.int_attr("sampling_ratio", 0) <= 0 {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype)
+            && out.dtype == x.dtype
+            && is_mlx_float(r.dtype)
+            && is_int_index(b.dtype),
+        "input/output must share one float dtype, rois must be float, and batch_indices int32/int64; got {} / {} / {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(r.dtype),
+        crate::registry::ort_dtype_name(b.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() == 4 && x.shape.iter().all(|&d| d >= 0),
+        "input must have static rank-4 shape, got {:?}",
+        x.shape
+    );
+    require!(
+        r.shape.len() == 2 && r.shape[1] == 4 && r.shape.iter().all(|&d| d >= 0),
+        "rois must have static shape [R,4], got {:?}",
+        r.shape
+    );
+    require!(
+        b.shape.len() == 1 && b.shape.iter().all(|&d| d >= 0),
+        "batch_indices must have static rank-1 shape, got {:?}",
+        b.shape
+    );
+    let sampling_ratio = node.int_attr("sampling_ratio", 0);
+    require!(
+        sampling_ratio > 0,
+        "sampling_ratio must be positive, got {sampling_ratio}"
+    );
     let mode = node.string_attr("mode", "avg");
-    if mode != "avg" && mode != "max" {
-        return false;
-    }
+    require!(
+        mode == "avg" || mode == "max",
+        "mode must be \"avg\" or \"max\", got {mode:?}"
+    );
     let ctm = node.string_attr("coordinate_transformation_mode", "half_pixel");
-    ctm == "half_pixel" || ctm == "output_half_pixel"
+    require!(
+        ctm == "half_pixel" || ctm == "output_half_pixel",
+        "coordinate_transformation_mode must be \"half_pixel\" or \"output_half_pixel\", got {ctm:?}"
+    );
+    Ok(())
 }
 
 // =================================================================================================
@@ -795,7 +980,11 @@ fn max_roi_pool_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), Mlx
     let rois = astype(ctx, r0, mlx::mlx_dtype__MLX_FLOAT32)?; // [R,5]
     let rr = ctx.shape_of(rois)[0];
 
-    let pooled = n.int_arrays.get("pooled_shape").cloned().unwrap_or_default();
+    let pooled = n
+        .int_arrays
+        .get("pooled_shape")
+        .cloned()
+        .unwrap_or_default();
     let ph = pooled[0] as i32;
     let pw = pooled[1] as i32;
     let scale = n.floats.get("spatial_scale").copied().unwrap_or(1.0);
@@ -901,28 +1090,46 @@ fn max_roi_pool_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), Mlx
     Ok(())
 }
 
-fn max_roi_pool_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() != 1 {
-        return false;
-    }
+fn max_roi_pool_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, r, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(r), Some(o)) => (x, r, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || !is_mlx_float(r.dtype) {
-        return false;
-    }
-    if x.shape.len() != 4 || !x.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if r.shape.len() != 2 || r.shape[1] != 5 || !r.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype && is_mlx_float(r.dtype),
+        "input/output must share one float dtype and rois must be float, got {} / {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(r.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() == 4 && x.shape.iter().all(|&d| d >= 0),
+        "input must have static rank-4 shape, got {:?}",
+        x.shape
+    );
+    require!(
+        r.shape.len() == 2 && r.shape[1] == 5 && r.shape.iter().all(|&d| d >= 0),
+        "rois must have static shape [R,5], got {:?}",
+        r.shape
+    );
     let (present, pooled) = node.ints_attr("pooled_shape");
-    if !present || pooled.len() != 2 {
-        return false;
-    }
-    pooled[0] >= 1 && pooled[1] >= 1
+    require!(
+        present && pooled.len() == 2,
+        "pooled_shape must contain exactly 2 values, got {:?}",
+        pooled
+    );
+    require!(
+        pooled[0] >= 1 && pooled[1] >= 1,
+        "pooled_shape dimensions must be positive, got {:?}",
+        pooled
+    );
+    Ok(())
 }
 
 // =================================================================================================
@@ -938,9 +1145,21 @@ fn max_unpool_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxEr
     let cc = xs[1];
     let r = xs.len() - 2;
 
-    let kernel = n.int_arrays.get("kernel_shape").cloned().unwrap_or_default();
-    let strides = n.int_arrays.get("strides").cloned().unwrap_or_else(|| vec![1; r]);
-    let pads = n.int_arrays.get("pads").cloned().unwrap_or_else(|| vec![0; 2 * r]);
+    let kernel = n
+        .int_arrays
+        .get("kernel_shape")
+        .cloned()
+        .unwrap_or_default();
+    let strides = n
+        .int_arrays
+        .get("strides")
+        .cloned()
+        .unwrap_or_else(|| vec![1; r]);
+    let pads = n
+        .int_arrays
+        .get("pads")
+        .cloned()
+        .unwrap_or_else(|| vec![0; 2 * r]);
 
     let mut total: i64 = nn as i64 * cc as i64;
     let mut s_out: i64 = 1;
@@ -968,38 +1187,57 @@ fn max_unpool_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxEr
     Ok(())
 }
 
-fn max_unpool_claim(node: &NodeView) -> bool {
+fn max_unpool_claim(node: &NodeView) -> ClaimResult {
     // 2-input form only: an explicit output_shape (input 2) may crop/pad -> leave to CPU.
-    if node.num_inputs() != 2 || node.input_present(2) || node.num_outputs() != 1 {
-        return false;
-    }
+    require!(
+        node.num_inputs() == 2 && !node.input_present(2) && node.num_outputs() == 1,
+        "only the 2-input form with 1 output is supported, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, i, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(x), Some(i), Some(o)) => (x, i, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || !is_int_index(i.dtype) {
-        return false;
-    }
-    if x.shape.len() < 3 || x.shape.len() > 5 || !x.shape.iter().all(|&d| d >= 0) {
-        return false;
-    }
-    if i.shape != x.shape {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && out.dtype == x.dtype && is_int_index(i.dtype),
+        "input/output must share one float dtype and indices must be int32/int64, got {} / {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(i.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        x.shape.len() >= 3 && x.shape.len() <= 5 && x.shape.iter().all(|&d| d >= 0),
+        "input must have static rank 3-5 shape, got {:?}",
+        x.shape
+    );
+    require!(
+        i.shape == x.shape,
+        "indices shape must match input shape, got {:?} vs {:?}",
+        i.shape,
+        x.shape
+    );
     let r = x.shape.len() - 2;
     let (kp, kernel) = node.ints_attr("kernel_shape");
-    if !kp || kernel.len() != r {
-        return false;
-    }
+    require!(
+        kp && kernel.len() == r,
+        "kernel_shape must contain {r} values, got {:?}",
+        kernel
+    );
     let (hs, strides) = node.ints_attr("strides");
-    if hs && strides.len() != r {
-        return false;
-    }
+    require!(
+        !hs || strides.len() == r,
+        "strides must contain {r} values, got {:?}",
+        strides
+    );
     let (hp, pads) = node.ints_attr("pads");
-    if hp && pads.len() != 2 * r {
-        return false;
-    }
-    true
+    require!(
+        !hp || pads.len() == 2 * r,
+        "pads must contain {} values, got {:?}",
+        2 * r,
+        pads
+    );
+    Ok(())
 }
 
 // ---- registration -------------------------------------------------------------------------------

@@ -2,9 +2,10 @@
 
 use crate::engine::{MlxError, NodeDesc, TranslationContext};
 use crate::registry::{
-    is_mlx_float, is_mlx_supported, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+    is_mlx_float, is_mlx_supported, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
 };
 use crate::sys::{mlx, ort};
+use crate::{deny, require};
 
 fn mean_axis(
     ctx: &mut TranslationContext,
@@ -68,37 +69,70 @@ fn mean_variance_normalization_op(
     Ok(())
 }
 
-fn dropout_claim(node: &NodeView) -> bool {
-    if node.num_inputs() < 1 || node.num_outputs() < 1 || node.num_outputs() > 2 {
-        return false;
-    }
+fn dropout_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() >= 1 && node.num_outputs() >= 1 && node.num_outputs() <= 2,
+        "expects at least 1 input and 1-2 outputs, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, y) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(y)) => (x, y),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_supported(x.dtype) || y.dtype != x.dtype {
-        return false;
+    require!(
+        is_mlx_supported(x.dtype) && y.dtype == x.dtype,
+        "input/output must share one MLX-supported dtype, got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(y.dtype)
+    );
+    if node.output_present(1) {
+        match node.output_info(1) {
+            Some(mask)
+                if mask.dtype
+                    == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
+                    && mask.shape == x.shape => {}
+            Some(mask) => deny!(
+                "mask must be bool with input shape {:?}, got dtype {} shape {:?}",
+                x.shape,
+                crate::registry::ort_dtype_name(mask.dtype),
+                mask.shape
+            ),
+            None => deny!("missing tensor type/shape info on mask output"),
+        }
     }
-    !node.output_present(1)
-        || matches!(node.output_info(1), Some(mask)
-            if mask.dtype == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
-                && mask.shape == x.shape)
+    Ok(())
 }
 
-fn mean_variance_normalization_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 1 || node.num_outputs() != 1 {
-        return false;
-    }
+fn mean_variance_normalization_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 1 && node.num_outputs() == 1,
+        "expects 1 input and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (x, y) = match (node.input_info(0), node.output_info(0)) {
         (Some(x), Some(y)) => (x, y),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on input or output"),
     };
-    if !is_mlx_float(x.dtype) || y.dtype != x.dtype || x.shape.is_empty() {
-        return false;
-    }
+    require!(
+        is_mlx_float(x.dtype) && y.dtype == x.dtype,
+        "input/output must share one float dtype, got {} -> {}",
+        crate::registry::ort_dtype_name(x.dtype),
+        crate::registry::ort_dtype_name(y.dtype)
+    );
+    require!(
+        !x.shape.is_empty(),
+        "input must have rank >= 1 (got a scalar)"
+    );
     let rank = x.shape.len() as i64;
     let (has_axes, axes) = node.ints_attr("axes");
-    !has_axes || axes.iter().all(|&axis| axis >= -rank && axis < rank)
+    require!(
+        !has_axes || axes.iter().all(|&axis| axis >= -rank && axis < rank),
+        "axes {:?} contain a value out of range for rank {rank}",
+        axes
+    );
+    Ok(())
 }
 
 pub fn register(registry: &mut OpRegistry) {

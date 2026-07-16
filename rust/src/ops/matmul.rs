@@ -6,8 +6,11 @@
 //! no backing buffer, which the boundary CopyOut cannot memcpy).
 
 use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
-use crate::registry::{is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
+use crate::registry::{
+    is_mlx_float, ClaimResult, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET,
+};
 use crate::sys::mlx;
+use crate::{deny, require};
 
 fn present(n: &NodeDesc, i: usize) -> bool {
     i < n.inputs.len() && n.inputs[i].source != Src::Absent
@@ -74,42 +77,71 @@ fn gemm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
 
 // ---- claim predicates --------------------------------------------------------------------------
 
-fn matmul_claim(node: &NodeView) -> bool {
-    if node.num_inputs() != 2 || node.num_outputs() < 1 {
-        return false;
-    }
+fn matmul_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() >= 1,
+        "expects 2 inputs and 1+ outputs, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
     let (a, b, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(a.dtype) || b.dtype != a.dtype || out.dtype != a.dtype {
-        return false;
-    }
-    a.shape.len() >= 2 && b.shape.len() >= 2
+    require!(
+        is_mlx_float(a.dtype) && b.dtype == a.dtype && out.dtype == a.dtype,
+        "inputs/output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(b.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        a.shape.len() >= 2 && b.shape.len() >= 2,
+        "both inputs must have rank >= 2 (got ranks {} and {})",
+        a.shape.len(),
+        b.shape.len()
+    );
+    Ok(())
 }
 
-fn gemm_claim(node: &NodeView) -> bool {
+fn gemm_claim(node: &NodeView) -> ClaimResult {
     let nin = node.num_inputs();
-    if (nin != 2 && nin != 3) || node.num_outputs() < 1 {
-        return false;
-    }
+    require!(
+        (nin == 2 || nin == 3) && node.num_outputs() >= 1,
+        "expects 2 or 3 inputs and 1+ outputs, got {}in/{}out",
+        nin,
+        node.num_outputs()
+    );
     let (a, b, out) = match (node.input_info(0), node.input_info(1), node.output_info(0)) {
         (Some(a), Some(b), Some(o)) => (a, b, o),
-        _ => return false,
+        _ => deny!("missing tensor type/shape info on an input or the output"),
     };
-    if !is_mlx_float(a.dtype) || b.dtype != a.dtype || out.dtype != a.dtype {
-        return false;
-    }
-    if a.shape.len() != 2 || b.shape.len() != 2 {
-        return false;
-    }
+    require!(
+        is_mlx_float(a.dtype) && b.dtype == a.dtype && out.dtype == a.dtype,
+        "A/B/output must share one float dtype (fp32/fp16/bf16), got {}, {} -> {}",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(b.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
+    require!(
+        a.shape.len() == 2 && b.shape.len() == 2,
+        "A and B must both have rank 2 (got ranks {} and {})",
+        a.shape.len(),
+        b.shape.len()
+    );
     if nin == 3 && node.input_present(2) {
         match node.input_info(2) {
             Some(c) if c.dtype == a.dtype && c.shape.len() <= 2 => {}
-            _ => return false,
+            Some(c) => deny!(
+                "C must match dtype {} and have rank <= 2 (got dtype {}, rank {})",
+                crate::registry::ort_dtype_name(a.dtype),
+                crate::registry::ort_dtype_name(c.dtype),
+                c.shape.len()
+            ),
+            None => deny!("C input has no tensor type/shape info"),
         }
     }
-    true
+    Ok(())
 }
 
 pub fn register(registry: &mut OpRegistry) {

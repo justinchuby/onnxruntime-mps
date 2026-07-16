@@ -1,5 +1,5 @@
 [package]
-name = "onnxruntime-mlx-ep"
+name = "onnxruntime-ep-mlx"
 version = "0.2.3"
 edition = "2024"
 description = "MLX-native ONNX Runtime execution provider (plugin EP) for Apple Silicon — binds mlx-c directly, no mlx-rs."
@@ -10,6 +10,10 @@ keywords = ["onnx", "onnxruntime", "mlx", "apple-silicon", "metal"]
 categories = ["science", "api-bindings", "hardware-support"]
 
 [lib]
+# Pin the lib (and therefore dylib) name so it stays `libonnxruntime_mlx_ep.dylib`
+# regardless of the crate name — the Python package, tests, CI and onnx-genai all
+# load the plugin by that exact filename.
+name = "onnxruntime_mlx_ep"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -17,7 +21,7 @@ crate-type = ["cdylib"]
 # `perfetto` (prost) feature — we export Chrome Trace JSON only. Kept as a `path`
 # dependency for local dev (sibling onnx-genai checkout) with a matching
 # `version` so `cargo publish` resolves it from crates.io (path is stripped at
-# publish time; publishing onnxruntime-mlx-ep requires this crate to be on
+# publish time; publishing onnxruntime-ep-mlx requires this crate to be on
 # crates.io first).
 onnx-runtime-tracer = { path = "../../onnx-genai/crates/onnx-runtime-tracer", version = "0.1.0-dev.2", default-features = false }
 

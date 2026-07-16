@@ -54,8 +54,8 @@ build-mlx/
 
 # Bundled runtime artifacts dropped into the wheel package by the build hook
 # (python/hatch_build.py). Rebuilt on every wheel build; never committed.
-python/src/onnxruntime_mlx/*.dylib
-python/src/onnxruntime_mlx/*.metallib
+python/src/onnxruntime_ep_mlx/*.dylib
+python/src/onnxruntime_ep_mlx/*.metallib
 
 # --- Python (op tests, tooling) ---
 __pycache__/

@@ -1,12 +1,12 @@
-"""onnxruntime-mlx: MLX-native ONNX Runtime execution provider for Apple Silicon.
+"""onnxruntime-ep-mlx: MLX-native ONNX Runtime execution provider for Apple Silicon.
 
 This package bundles the ``libonnxruntime_mlx_ep.dylib`` plugin execution
 provider and a thin registration helper. Typical usage::
 
     import onnxruntime as ort
-    import onnxruntime_mlx
+    import onnxruntime_ep_mlx
 
-    onnxruntime_mlx.register_execution_provider_library()
+    onnxruntime_ep_mlx.register_execution_provider_library()
     sess = ort.InferenceSession(
         model,
         providers=["MLXExecutionProvider", "CPUExecutionProvider"],
@@ -42,7 +42,7 @@ __all__ = [
 EP_NAME: str = "MLXExecutionProvider"
 
 #: Vendor string carried by the plugin (the repo name).
-_VENDOR: str = "onnxruntime-mlx"
+_VENDOR: str = "onnxruntime-ep-mlx"
 
 #: Basename of the cargo-built plugin dylib bundled inside this package.
 _PLUGIN_DYLIB_NAME: str = "libonnxruntime_mlx_ep.dylib"
@@ -51,7 +51,7 @@ try:  # Python 3.8+: read the installed distribution version.
     from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
     try:
-        __version__: str = _pkg_version("onnxruntime-mlx")
+        __version__: str = _pkg_version("onnxruntime-ep-mlx")
     except PackageNotFoundError:  # pragma: no cover - running from a source tree
         __version__ = "0.0.0+unknown"
 except ImportError:  # pragma: no cover
@@ -88,7 +88,7 @@ def library_path() -> str:
     if not os.path.isfile(path):
         raise FileNotFoundError(
             f"Bundled MLX EP plugin not found at {path!r}. "
-            "The onnxruntime-mlx wheel appears to be incomplete."
+            "The onnxruntime-ep-mlx wheel appears to be incomplete."
         )
     return path
 

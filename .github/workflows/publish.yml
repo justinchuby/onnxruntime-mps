@@ -1,9 +1,9 @@
 name: publish
 
-# Publishes the onnxruntime-mlx wheel to PyPI via Trusted Publishing (OIDC, no API token).
+# Publishes the onnxruntime-ep-mlx wheel to PyPI via Trusted Publishing (OIDC, no API token).
 #
 # ⚠️ VERIFY against your PyPI trusted-publisher configuration before the first release:
-#   - PyPI project name          : onnxruntime-mlx   (must match [project].name in python/pyproject.toml)
+#   - PyPI project name          : onnxruntime-ep-mlx   (must match [project].name in python/pyproject.toml)
 #   - Workflow filename          : publish.yml       (this file)
 #   - GitHub environment         : pypi              (the `environment:` on the publish job below)
 # If your trusted publisher uses a different project name or environment (or none), update them here.

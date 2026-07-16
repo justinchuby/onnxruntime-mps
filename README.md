@@ -1,5 +1,7 @@
 # onnxruntime-mlx
 
+> **PyPI package: [`onnxruntime-ep-mlx`](https://pypi.org/project/onnxruntime-ep-mlx/)** — `pip install onnxruntime-ep-mlx`, `import onnxruntime_ep_mlx`. (Formerly published as `onnxruntime-mlx`, now renamed.)
+
 An **MLX-native execution provider** for ONNX Runtime on Apple Silicon, built as an out-of-tree
 **plugin EP** (ORT plugin-EP C ABI, ORT 1.27 / `ORT_API_VERSION 27`). It ships as a standalone
 `libonnxruntime_mlx_ep.dylib` loaded by a stock prebuilt `libonnxruntime.dylib` via
@@ -64,15 +66,15 @@ The crate binds the ORT plugin-EP C ABI and `mlx-c` directly via `bindgen`; it d
 ### Python (recommended)
 
 ```sh
-pip install -U onnxruntime-mlx        # macOS/Apple-Silicon wheel; bundles the mlx runtime
+pip install -U onnxruntime-ep-mlx        # macOS/Apple-Silicon wheel; bundles the mlx runtime
 ```
 
 ```python
 import onnxruntime as ort
-import onnxruntime_mlx
+import onnxruntime_ep_mlx
 
 # Register the plugin EP once, then select it (with CPU fallback) like any provider.
-onnxruntime_mlx.register_execution_provider_library()          # name: "MLXExecutionProvider"
+onnxruntime_ep_mlx.register_execution_provider_library()          # name: "MLXExecutionProvider"
 sess = ort.InferenceSession(
     "model.onnx",
     providers=["MLXExecutionProvider", "CPUExecutionProvider"],
@@ -80,7 +82,7 @@ sess = ort.InferenceSession(
 out = sess.run(None, feeds)
 ```
 
-`onnxruntime_mlx` also exposes `library_path()`, `ep_name()`, `version()`, and
+`onnxruntime_ep_mlx` also exposes `library_path()`, `ep_name()`, `version()`, and
 `append_to_session_options(so)`.
 
 ### C / C++ (or any onnxruntime binding)
@@ -163,7 +165,7 @@ If you require bit-exact parity with a CPU reference over a long generation, run
 docs/     design docs (DESIGN, OP_ARCHITECTURE, MLX_EVALUATION)
 rust/     the Rust EP: plugin-EP C-ABI vtables (factory/ep) + the modular ONNX->MLX
           translator (engine, registry, ops/*.rs) over a mlx-c RAII layer (mlx.rs)
-python/   pure-Python pip package (onnxruntime-mlx): a locator that bundles + registers
+python/   pure-Python pip package (onnxruntime-ep-mlx): a locator that bundles + registers
           the cargo-built dylib (hatchling build hook, hatch_build.py)
 tests/    MLX op-correctness (tests/ops, pytest) + ONNX-standard conformance (tests/conformance)
 .github/  CI (cargo build + op tests) and PyPI trusted-publishing workflows

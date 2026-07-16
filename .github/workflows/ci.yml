@@ -136,14 +136,14 @@ jobs:
           # One pure-Python platform wheel (no CPython ABI) serves 3.12/3.13/free-threaded.
           # The platform tag follows the build interpreter's sysconfig (universal2 on the
           # python.org framework build, arm64 on an arm-only build) — match any macOS tag.
-          test -n "$(ls dist/onnxruntime_mlx-*-py3-none-macosx_*.whl 2>/dev/null)"
+          test -n "$(ls dist/onnxruntime_ep_mlx-*-py3-none-macosx_*.whl 2>/dev/null)"
 
       - name: Audit the wheel (abi3audit — no native Python ABI to violate)
         run: |
           python -m pip install --upgrade abi3audit
           # The wheel ships no compiled Python extension, so abi3audit finds nothing
           # auditable and --strict passes: the wheel is abi3-clean by construction.
-          python -m abi3audit --strict --report dist/onnxruntime_mlx-*-py3-none-macosx_*.whl
+          python -m abi3audit --strict --report dist/onnxruntime_ep_mlx-*-py3-none-macosx_*.whl
 
       - name: Import + register under Python 3.13 (proves cross-version portability)
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -152,10 +152,10 @@ jobs:
       - name: Cross-version smoke test
         run: |
           python -m pip install --upgrade "onnxruntime==${ORT_VERSION}"
-          python -m pip install dist/onnxruntime_mlx-*-py3-none-macosx_*.whl
+          python -m pip install dist/onnxruntime_ep_mlx-*-py3-none-macosx_*.whl
           export DYLD_LIBRARY_PATH="$ORT_HOME/lib"
           python - <<'PY'
-          import os, sys, onnxruntime_mlx as m
+          import os, sys, onnxruntime_ep_mlx as m
           print("python", sys.version.split()[0])
           print("version", m.version(), "ep", m.ep_name(), "lib", m.library_path())
           assert os.path.isfile(m.library_path())

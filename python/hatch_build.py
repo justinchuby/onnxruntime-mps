@@ -1,4 +1,4 @@
-"""Hatchling build hook for onnxruntime-mlx.
+"""Hatchling build hook for onnxruntime-ep-mlx.
 
 Builds the Rust execution provider (`cargo build --release` in ../rust), then
 bundles the resulting `libonnxruntime_mlx_ep.dylib` together with its mlx-c/mlx
@@ -38,7 +38,7 @@ def _brew_prefix(pkg: str) -> Path:
 
 
 def _run(cmd: list[str], **kw) -> None:
-    print("[onnxruntime-mlx build] $", " ".join(cmd), flush=True)
+    print("[onnxruntime-ep-mlx build] $", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, **kw)
 
 
@@ -63,7 +63,7 @@ class CustomBuildHook(BuildHookInterface):
 
     def initialize(self, version: str, build_data: dict) -> None:
         if sys.platform != "darwin":
-            raise RuntimeError("onnxruntime-mlx only builds on macOS (Apple Silicon).")
+            raise RuntimeError("onnxruntime-ep-mlx only builds on macOS (Apple Silicon).")
 
         project_root = Path(self.root)          # the python/ dir
         repo_root = project_root.parent
@@ -74,7 +74,7 @@ class CustomBuildHook(BuildHookInterface):
                 "from a full repository checkout (python/ next to rust/)."
             )
 
-        pkg_dir = project_root / "src" / "onnxruntime_mlx"
+        pkg_dir = project_root / "src" / "onnxruntime_ep_mlx"
 
         # 1) Build the Rust EP dylib.
         env = dict(os.environ)

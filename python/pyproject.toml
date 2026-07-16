@@ -3,13 +3,13 @@ requires = ["hatchling>=1.24", "delocate>=0.11"]
 build-backend = "hatchling.build"
 
 [project]
-name = "onnxruntime-mlx"
-version = "0.2.2"
+name = "onnxruntime-ep-mlx"
+version = "0.2.3"
 description = "MLX-native ONNX Runtime execution provider (plugin EP) for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "onnxruntime-mlx" }]
+authors = [{ name = "onnxruntime-ep-mlx" }]
 keywords = ["onnxruntime", "mlx", "execution-provider", "apple-silicon", "metal", "coreml"]
 dependencies = ["onnxruntime>=1.22"]
 classifiers = [
@@ -33,7 +33,7 @@ Repository = "https://github.com/justinchuby/onnxruntime-mlx"
 # --- Hatchling wheel build ----------------------------------------------------
 # The execution provider is a Rust `cdylib` (../rust). It is NOT a Python
 # extension module, so there is no compiled Python surface to build: the Python
-# layer (onnxruntime_mlx/__init__.py) is a *pure-Python locator* that only finds
+# layer (onnxruntime_ep_mlx/__init__.py) is a *pure-Python locator* that only finds
 # and registers the bundled dylib. The custom build hook (hatch_build.py):
 #   1. runs `cargo build --release` in ../rust (honouring ORT_INCLUDE_DIR / ORT_HOME),
 #   2. bundles the cargo-built libonnxruntime_mlx_ep.dylib + the mlx-c/mlx runtime
@@ -51,11 +51,11 @@ Repository = "https://github.com/justinchuby/onnxruntime-mlx"
 # interpreter (GIL and free-threaded alike) and is abi3audit-clean by construction.
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/onnxruntime_mlx"]
+packages = ["src/onnxruntime_ep_mlx"]
 # The dylibs / metallib are placed into the package dir by the build hook.
 artifacts = [
-  "src/onnxruntime_mlx/*.dylib",
-  "src/onnxruntime_mlx/*.metallib",
+  "src/onnxruntime_ep_mlx/*.dylib",
+  "src/onnxruntime_ep_mlx/*.metallib",
 ]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
@@ -65,7 +65,7 @@ path = "hatch_build.py"
 # The sdist carries the Python layer + the build hook. Wheels are built from a
 # full repo checkout (where ../rust is present) so the hook can run cargo.
 include = [
-  "src/onnxruntime_mlx",
+  "src/onnxruntime_ep_mlx",
   "hatch_build.py",
   "README.md",
 ]

@@ -125,11 +125,12 @@ LRN_CASES = [
     dict(size=3, alpha=1e-4, beta=0.75, bias=1.0),
     dict(size=5, alpha=2e-4, beta=0.6, bias=1.5),
     dict(size=7, alpha=1e-3, beta=0.5, bias=2.0),
+    dict(size=9, alpha=1e-4, beta=0.75, bias=1.0),
 ]
 
 
 @pytest.mark.parametrize("dt", DTYPES, ids=DT_IDS)
-@pytest.mark.parametrize("params", LRN_CASES, ids=["s3", "s5", "s7"])
+@pytest.mark.parametrize("params", LRN_CASES, ids=["s3", "s5", "s7", "s9"])
 def test_lrn(dt, params) -> None:
     shape = (2, 7, 3, 3)
     model = build(

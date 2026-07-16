@@ -8,6 +8,7 @@
 //!   * GroupNormalization (ai.onnx opset 21 form)       — composed mean/var/rsqrt
 //!   * LpNormalization (ai.onnx)                        — composed abs/sum or square/sum/sqrt
 //!   * BatchNormalization (ai.onnx, inference form)     — composed per-channel affine
+//!   * LRN (ai.onnx, across-channel)                    — composed square/window-sum/power/divide
 //!
 //! Every handler honors the resolved input dtype (fp32/fp16/bf16) with no per-dtype branching:
 //! the MLX fast norms run in whatever float dtype the input carries, and the composed paths keep a
@@ -17,6 +18,7 @@ use crate::engine::{MlxError, NodeDesc, Src, TranslationContext};
 use crate::registry::{is_mlx_float, NodeView, OpRegistration, OpRegistry, K_ANY_OPSET};
 use crate::sys::mlx;
 use crate::sys::ort;
+use std::os::raw::c_char;
 
 // ---- small local MLX helpers -------------------------------------------------------------------
 
@@ -271,6 +273,106 @@ fn batch_norm_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxEr
     Ok(())
 }
 
+// ---- LRN helpers -------------------------------------------------------------------------------
+
+/// Pad `a` along the channel axis (axis 1) with `low`/`high` copies of `value`.
+fn pad_channel(
+    ctx: &mut TranslationContext,
+    a: mlx::mlx_array,
+    low: i32,
+    high: i32,
+    value: mlx::mlx_array,
+) -> Result<mlx::mlx_array, MlxError> {
+    if low == 0 && high == 0 {
+        return Ok(a);
+    }
+    let axes = [1i32];
+    let lo = [low];
+    let hi = [high];
+    let mode = b"constant\0";
+    let out = ctx.emit(|res, s| unsafe {
+        mlx::mlx_pad(
+            res,
+            a,
+            axes.as_ptr(),
+            1,
+            lo.as_ptr(),
+            1,
+            hi.as_ptr(),
+            1,
+            value,
+            mode.as_ptr() as *const c_char,
+            s,
+        )
+    })?;
+    ctx.contiguous(out)
+}
+
+/// Slice `a` along the channel axis (axis 1) to `[lo, hi)`, keeping all other axes intact.
+fn slice_channel(ctx: &mut TranslationContext, a: mlx::mlx_array, lo: i32, hi: i32) -> Result<mlx::mlx_array, MlxError> {
+    let shape = ctx.shape_of(a);
+    let rank = shape.len();
+    let mut start = vec![0i32; rank];
+    let mut stop = shape;
+    let stride = vec![1i32; rank];
+    start[1] = lo;
+    stop[1] = hi;
+    ctx.emit(|res, s| unsafe {
+        mlx::mlx_slice(
+            res,
+            a,
+            start.as_ptr(),
+            rank,
+            stop.as_ptr(),
+            rank,
+            stride.as_ptr(),
+            rank,
+            s,
+        )
+    })
+}
+
+/// LRN (ai.onnx, across-channel): for input X=[N,C,*S],
+///   square_sum[n,c,*] = sum over the `size`-wide channel window centered at c (clamped to [0,C-1]),
+///   Y[n,c,*] = X[n,c,*] / (bias + (alpha/size) * square_sum[n,c,*])^beta.
+/// The window sum is computed by zero-padding X^2 along the channel axis (so out-of-range channels
+/// contribute 0, matching ONNX's clamped window) then summing `size` shifted channel slices.
+fn lrn_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
+    let x = ctx.resolve(&n.inputs[0])?;
+    let shape = ctx.shape_of(x);
+    let c = shape[1];
+    let size = n.ints.get("size").copied().unwrap_or(1).max(1) as i32;
+    let alpha = n.floats.get("alpha").copied().unwrap_or(1e-4);
+    let beta = n.floats.get("beta").copied().unwrap_or(0.75);
+    let bias = n.floats.get("bias").copied().unwrap_or(1.0);
+    let dt = ctx.dtype_of(x);
+
+    let x2 = mul(ctx, x, x)?;
+    // Window [c - floor((size-1)/2), c + ceil((size-1)/2)] clamped to [0, C-1].
+    let pad_before = (size - 1) / 2;
+    let pad_after = size - 1 - pad_before;
+    let zero = scalar_like(ctx, 0.0, dt)?;
+    let xp = pad_channel(ctx, x2, pad_before, pad_after, zero)?; // channel length C + size - 1
+
+    // square_sum[:, c] = sum_{k=0}^{size-1} xp[:, c + k]
+    let mut square_sum = slice_channel(ctx, xp, 0, c)?;
+    for k in 1..size {
+        let s = slice_channel(ctx, xp, k, k + c)?;
+        square_sum = add(ctx, square_sum, s)?;
+    }
+
+    let scale = scalar_like(ctx, alpha / size as f32, dt)?;
+    let bias_s = scalar_like(ctx, bias, dt)?;
+    let beta_s = scalar_like(ctx, beta, dt)?;
+    let scaled = mul(ctx, square_sum, scale)?;
+    let base = add(ctx, scaled, bias_s)?;
+    let denom = ctx.binary(mlx::mlx_power, base, beta_s)?;
+    let out = divide(ctx, x, denom)?;
+    ctx.mark_composed("LRN composed (square/window-sum/power/divide) — no fused LRN kernel");
+    ctx.bind(&n.outputs[0], out);
+    Ok(())
+}
+
 // ---- claim predicates --------------------------------------------------------------------------
 
 fn tensor_dtype(node: &NodeView, i: usize) -> Option<ort::ONNXTensorElementDataType> {
@@ -451,6 +553,27 @@ fn batch_norm_claim(node: &NodeView) -> bool {
     node.int_attr("training_mode", 0) == 0
 }
 
+/// LRN (ai.onnx, across-channel): single float input/output of equal dtype, static shape with a
+/// channel axis, and a valid window `size >= 1`.
+fn lrn_claim(node: &NodeView) -> bool {
+    if node.num_inputs() != 1 || node.num_outputs() != 1 {
+        return false;
+    }
+    let (x, out) = match (node.input_info(0), node.output_info(0)) {
+        (Some(x), Some(o)) => (x, o),
+        _ => return false,
+    };
+    if !is_mlx_float(x.dtype) || out.dtype != x.dtype || x.shape.len() < 2 {
+        return false;
+    }
+    for &d in &x.shape {
+        if d <= 0 {
+            return false; // need static dims to build the channel pad/slice
+        }
+    }
+    node.int_attr("size", 0) >= 1
+}
+
 // ---- registration ------------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
@@ -480,6 +603,7 @@ pub fn register_norm(registry: &mut OpRegistry) {
     reg(registry, "", "GroupNormalization", K_ANY_OPSET, group_norm_op, group_norm_claim);
     reg(registry, "", "LpNormalization", K_ANY_OPSET, lp_norm_op, lp_norm_claim);
     reg(registry, "", "BatchNormalization", K_ANY_OPSET, batch_norm_op, batch_norm_claim);
+    reg(registry, "", "LRN", K_ANY_OPSET, lrn_op, lrn_claim);
     reg(registry, "com.microsoft", "SimplifiedLayerNormalization", K_ANY_OPSET, simplified_layer_norm_op, simplified_layer_norm_claim);
     reg(registry, "com.microsoft", "SkipLayerNormalization", K_ANY_OPSET, skip_layer_norm_op, skip_layer_norm_claim);
     reg(registry, "com.microsoft", "SkipSimplifiedLayerNormalization", K_ANY_OPSET, skip_rms_norm_op, skip_rms_norm_claim);

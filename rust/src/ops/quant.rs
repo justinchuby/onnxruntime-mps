@@ -872,13 +872,31 @@ fn matmulnbits_claim(node: &NodeView) -> ClaimResult {
         Some(o) => o,
         None => deny!("missing output type/shape info"),
     };
-    require!(is_float(out.dtype), "output must be float32");
+    require!(
+        is_mlx_float(out.dtype),
+        "output must be a float (fp32/fp16/bf16), got {}",
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     let (a, b, s) = match (node.input_info(0), node.input_info(1), node.input_info(2)) {
         (Some(a), Some(b), Some(s)) => (a, b, s),
         _ => deny!("missing tensor type/shape info on an input"),
     };
-    require!(is_float(a.dtype) && is_uint8(b.dtype) && is_float(s.dtype),
-        "activation/scales must be float32 and packed weights must be uint8");
+    require!(
+        is_mlx_float(a.dtype) && is_uint8(b.dtype) && is_mlx_float(s.dtype),
+        "activation/scales must be float (fp32/fp16/bf16) and packed weights uint8, got a={}, b={}, scales={}",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(b.dtype),
+        crate::registry::ort_dtype_name(s.dtype)
+    );
+    // The in-graph dequant + matmul run in the activation's float dtype, so activation, scales and
+    // output must share one float dtype (q4f16 = all fp16; q4 = all fp32).
+    require!(
+        a.dtype == s.dtype && a.dtype == out.dtype,
+        "activation, scales and output must share one float dtype, got a={}, scales={}, out={}",
+        crate::registry::ort_dtype_name(a.dtype),
+        crate::registry::ort_dtype_name(s.dtype),
+        crate::registry::ort_dtype_name(out.dtype)
+    );
     // Only the 3-input symmetric or 4-input asymmetric (uint8 packed int4 zero_points) forms.
     if node.input_present(3) {
         match node.input_info(3) {

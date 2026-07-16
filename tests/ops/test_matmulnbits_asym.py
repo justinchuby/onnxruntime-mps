@@ -27,19 +27,20 @@ def _pack_int4_last(vals: np.ndarray) -> np.ndarray:
     return (lo | (hi << 4)).astype(np.uint8)
 
 
-def _matmulnbits_model(*, M: int, K: int, N: int, block: int, asymmetric: bool):
-    rng = np.random.default_rng(hash((M, K, N, block, asymmetric)) & 0xFFFFFFFF)
+def _matmulnbits_model(*, M: int, K: int, N: int, block: int, asymmetric: bool, dtype=DT.FLOAT):
+    np_dt = np.float16 if dtype == DT.FLOAT16 else np.float32
+    rng = np.random.default_rng(hash((M, K, N, block, asymmetric, int(dtype))) & 0xFFFFFFFF)
     n_blocks = (K + block - 1) // block
-    a = rng.standard_normal((1, M, K)).astype(np.float32)
+    a = rng.standard_normal((1, M, K)).astype(np_dt)
     # Quantized int4 weight [N, n_blocks, block] then packed to [N, n_blocks, block/2] uint8.
     qvals = rng.integers(0, 16, size=(N, n_blocks, block), dtype=np.uint8)
     b = _pack_int4_last(qvals)
-    scales = (rng.standard_normal((N * n_blocks,)).astype(np.float32) * 0.05)
+    scales = (rng.standard_normal((N * n_blocks,)) * 0.05).astype(np_dt)
 
     inputs = [
-        m.tensor("a", DT.FLOAT, [1, M, K]),
+        m.tensor("a", dtype, [1, M, K]),
         m.tensor("b", DT.UINT8, [N, n_blocks, block // 2]),
-        m.tensor("scales", DT.FLOAT, [N * n_blocks]),
+        m.tensor("scales", dtype, [N * n_blocks]),
     ]
     feeds = {"a": a, "b": b, "scales": scales}
 
@@ -53,7 +54,7 @@ def _matmulnbits_model(*, M: int, K: int, N: int, block: int, asymmetric: bool):
         inputs.append(m.tensor("zero_points", DT.UINT8, [N * cols]))
         feeds["zero_points"] = zp_packed
 
-    outputs = [m.tensor("out", DT.FLOAT, [1, M, N])]
+    outputs = [m.tensor("out", dtype, [1, M, N])]
     model = m.make_model(
         "MatMulNBits",
         inputs,
@@ -123,3 +124,15 @@ def test_matmulnbits_symmetric(block: int, M: int) -> None:
 def test_matmulnbits_asymmetric(block: int, M: int) -> None:
     model, feeds = _matmulnbits_model(M=M, K=block * 3, N=16, block=block, asymmetric=True)
     _check(model, feeds)
+
+
+# --- fp16 activation/scales/output (q4f16 export form, e.g. gemma-4-E2B decoder) -----------------
+@pytest.mark.parametrize("block", [16, 32, 64, 128])
+@pytest.mark.parametrize("M", [1, 8], ids=["decode", "prefill"])
+@pytest.mark.parametrize("asym", [False, True], ids=["sym", "asym"])
+def test_matmulnbits_fp16(block: int, M: int, asym: bool) -> None:
+    model, feeds = _matmulnbits_model(
+        M=M, K=block * 3, N=16, block=block, asymmetric=asym, dtype=DT.FLOAT16
+    )
+    # fp16 dequant + matmul accumulates in half — looser tolerance than the fp32 form.
+    _check(model, feeds, rtol=6e-2, atol=6e-2)

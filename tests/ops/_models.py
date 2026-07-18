@@ -28,6 +28,8 @@ def _attr(name: str, value: object) -> ir.Attr:
         return ir.AttrFloat32(name, value)
     if isinstance(value, int):
         return ir.AttrInt64(name, int(value))
+    if isinstance(value, str):
+        return ir.AttrString(name, value)
     raise TypeError(f"unsupported attribute type for {name!r}: {type(value)!r}")
 
 

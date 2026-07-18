@@ -22,6 +22,8 @@ no `.metal` kernels to maintain.
 `ONNX fused subgraph → MLX graph → single mlx_eval at the subgraph boundary → ORT outputs`
 
 - **MatMulNBits** → `mlx_quantized_matmul` (int4 weights repacked once, cached on the plan)
+- **QMoE** (quantized Mixture-of-Experts, `quant_type='int'`) → dense per-expert matmuls + top-k
+  softmax routing + SwiGLU/silu/gelu/relu activation (int4/int8 experts dequantized in-graph)
 - **GroupQueryAttention** (RoPE in-op) → `mlx_fast_scaled_dot_product_attention` + `mlx_fast_rope`
 - **RMSNormalization / SkipSimplifiedLayerNormalization** → `mlx_fast_rms_norm`
 - **GatherBlockQuantized** (symmetric int4 embedding) → gather + dequant
@@ -32,9 +34,10 @@ Ops the EP does not translate are left unclaimed and run on ORT's CPU EP.
 The translator covers the **full set of ops Mobius emits** (~85 op types) via a modular, opset-aware
 registry (`rust/src/ops/*.rs`) — math/logical, reductions, shape/data-movement, normalizations,
 attention (GQA, Attention 23/24, MHA, RoPE), dense MatMul/Gemm, Conv/pooling, quantized matmul &
-embedding, and more, in fp32/fp16/bf16. A handful of ops that need engine-level control-flow or
-recurrence (`Scan`, `LSTM`, `LinearAttention`, `MoE`, `PackedMultiHeadAttention`) run on ORT CPU by
-design. See [`docs/OP_ARCHITECTURE.md`](docs/OP_ARCHITECTURE.md) for the full coverage table.
+embedding, quantized Mixture-of-Experts (`QMoE`), and more, in fp32/fp16/bf16. A handful of ops that
+need engine-level control-flow or recurrence (`Scan`, `LSTM`, `LinearAttention`, float `MoE`,
+`PackedMultiHeadAttention`) run on ORT CPU by design. See
+[`docs/OP_ARCHITECTURE.md`](docs/OP_ARCHITECTURE.md) for the full coverage table.
 
 ## When is a graph fast? (claim + compile rules of thumb)
 
@@ -150,19 +153,28 @@ single MLX closure that is traced + `mlx_compile`d once and replayed, so a stati
 end-to-end on the GPU with one dispatch (e.g. Perch: 725/725 nodes claimed, 1 fused subgraph).
 
 For **LLMs**, the EP accelerates both prefill / TTFT and — on larger quantized decoders — decode.
-Qwen2.5-0.5B, same machine, warm:
+The **Foundry Local** q4f16 decoders below run on the same M1 Max, warm, MLX EP vs the ORT CPU EP
+(decode = 1 token with 128 past; prefill = 128-token step):
 
-| Phase | CPU EP | MLX EP | Result |
-|---|---:|---:|---|
-| Prefill / TTFT (~280-token prompt) | 294 ms | 74 ms | **MLX 4.0× faster** |
-| Decode (per-token throughput) | 211 tok/s | 105 tok/s | CPU-favored on this small model |
+| Model | Arch | Prefill | Decode |
+|---|---|---:|---:|
+| Qwen2.5-0.5B | GQA, external rotary | **5.2×** | dispatch-bound (CPU-favored) |
+| Phi-3.5-mini | Phi3, GQA | **5.29×** | 1.19× |
+| Phi-4-mini | Phi4, long-context RoPE | **5.78×** | 1.10× |
+| Mistral-7B-Instruct | GQA, growing KV | **11.89×** | **3.30×** |
+| gemma-4-E2B | Gemma3n, 15-layer | 3.3× | **3.3×** |
 
-The prefill lead grows with prompt length. On a small 0.5B model decode is weight-bandwidth-bound and
-the CPU `accuracy_level=4` int8 MatMulNBits path wins per-token — but on a larger **q4f16** decoder the
-MLX path pulls ahead: the **gemma-4-E2B** decoder (Gemma3n, 15 layers, int4 weights + fp16 activations)
-runs a decode step (1 token, 64 past) in **33 ms vs 111 ms on CPU — 3.3×** once its fp16 MatMulNBits,
-`num_heads`-inferred RotaryEmbedding, and 11-input GroupQueryAttention (external rotary +
-attention_bias) all run on MLX.
+The prefill lead grows with prompt length and with model size (Mistral-7B: **11.9×**). Decode is
+weight-bandwidth-bound: on a small 0.5B model the CPU `accuracy_level=4` int8 MatMulNBits path wins
+per-token, but on larger **q4f16** decoders the MLX path pulls ahead — the **gemma-4-E2B** decoder
+(Gemma3n, int4 weights + fp16 activations) runs a decode step in **33 ms vs 111 ms on CPU (3.3×)**,
+and **Mistral-7B** reaches **3.30×** decode — once their fp16 MatMulNBits, `num_heads`-inferred
+RotaryEmbedding, and GroupQueryAttention (9-/11-input, external rotary + attention_bias) all run on
+MLX.
+
+Phi-4-mini additionally exercises a data-dependent `If` (long-context RoPE-cache selection): the EP
+leaves that control-flow node on the CPU (its condition is a runtime value) while still offloading the
+rest of the decoder, so it lands at **5.78×** prefill instead of falling entirely back to CPU.
 
 
 Any op the EP doesn't claim falls back to the ORT CPU EP, so **every** graph still runs correctly —

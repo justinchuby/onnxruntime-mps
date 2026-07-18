@@ -1222,6 +1222,344 @@ fn qlinear_conv_claim(node: &NodeView) -> ClaimResult {
     Ok(())
 }
 
+// ---- QMoE ---------------------------------------------------------------------------------------
+// Quantized Mixture-of-Experts (com.microsoft.QMoE). Supported subset: quant_type='int', symmetric
+// int4/int8 column- or block-wise expert weights, top-k softmax routing, and SwiGLU (interleaved,
+// swiglu_fusion=1) / silu / gelu / relu / identity activation. Compute is DENSE over experts: every
+// expert is evaluated for every token and then masked by the top-k routing gate (weights that are
+// zero outside a token's top-k). That avoids any data-dependent token scatter/gather, so the op is a
+// handful of batched MLX matmuls that fuse into the compiled closure. Declined (left to ORT CPU):
+// fc3 experts, asymmetric zero_points, router_weights, sparse-mixer, and fp4/fp8/wfp4afp8 quant.
+
+const QMOE_IN_INPUT: usize = 0;
+const QMOE_IN_ROUTER: usize = 1;
+const QMOE_IN_FC1_W: usize = 2;
+const QMOE_IN_FC1_S: usize = 3;
+const QMOE_IN_FC1_B: usize = 4;
+const QMOE_IN_FC2_W: usize = 5;
+const QMOE_IN_FC2_S: usize = 6;
+const QMOE_IN_FC2_B: usize = 7;
+const QMOE_IN_FC3_W: usize = 8;
+const QMOE_IN_FC1_ZP: usize = 11;
+const QMOE_IN_FC2_ZP: usize = 12;
+const QMOE_IN_ROUTER_W: usize = 14;
+
+/// Dequantize a symmetric int4/int8 expert-weight tensor [E, N, ceil(K/pack)] to a dense [E, N, K]
+/// MLX array in `comp_dt`. Faithful to ORT's `DequantizeBlock`: value = (q - 2^(bits-1)) * scale,
+/// where the nibble/byte for column c is at packed index c/pack with shift (c%pack)*bits, and each
+/// scale spans `block_size` columns along K (column-wise = one scale per row when block_size==0).
+fn qmoe_dequant(
+    ctx: &mut TranslationContext,
+    n: &NodeDesc,
+    widx: usize,
+    sidx: usize,
+    e: i64,
+    nrows: i64,
+    k: i64,
+    bits: i64,
+    block_size: i64,
+    comp_dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
+    let pack = 8 / bits;
+    if block_size > 0 && k % block_size != 0 {
+        return Err(format!("QMoE: K={k} not divisible by block_size={block_size}"));
+    }
+    let blocks = if block_size > 0 { k / block_size } else { 1 };
+    let block = if block_size > 0 { block_size } else { k };
+    let rows = (e * nrows) as i32;
+    let packed_k = (k + pack - 1) / pack;
+    let wp = ctx.resolve(&n.inputs[widx])?;
+    let w2d = ctx.reshape(wp, &[rows, packed_k as i32])?;
+    let q = if bits == 4 {
+        let un = unpack_nibbles(ctx, w2d)?; // [rows, 2*ceil(K/2)]
+        let cols = ctx.shape_of(un)[1];
+        if cols != k as i32 {
+            ctx.slice(un, &[0, 0], &[rows, k as i32])?
+        } else {
+            un
+        }
+    } else {
+        w2d // 8-bit: one byte per value, already [rows, K]
+    };
+    let qf = ctx.astype(q, comp_dt)?;
+    let zpv = f32(ctx, (1i64 << (bits - 1)) as f32);
+    let zp = ctx.astype(zpv, comp_dt)?;
+    let centered = sub(ctx, qf, zp)?;
+    let scales = ctx.resolve(&n.inputs[sidx])?;
+    let sc2d = ctx.reshape(scales, &[rows, blocks as i32])?;
+    let sc2d = ctx.astype(sc2d, comp_dt)?;
+    let sc_full = broadcast_blocks(ctx, sc2d, rows, blocks as i32, block as i32)?;
+    let deq = mul(ctx, centered, sc_full)?;
+    ctx.reshape(deq, &[e as i32, nrows as i32, k as i32])
+}
+
+/// SwiGLU on interleaved gate/linear halves (matches ORT `ApplySwiGLUActivation`):
+/// g = min(gate, limit); l = clamp(linear, -limit, limit); out = g*sigmoid(alpha*g) * (l + beta).
+fn qmoe_swiglu(
+    ctx: &mut TranslationContext,
+    gate: mlx::mlx_array,
+    linear: mlx::mlx_array,
+    alpha: f32,
+    beta: f32,
+    limit: f32,
+    comp_dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
+    let lim_v = f32(ctx, limit);
+    let lim = ctx.astype(lim_v, comp_dt)?;
+    let neglim_v = f32(ctx, -limit);
+    let neglim = ctx.astype(neglim_v, comp_dt)?;
+    let g = ctx.binary(mlx::mlx_minimum, gate, lim)?;
+    let l = ctx.emit(|res, s| unsafe { mlx::mlx_clip(res, linear, neglim, lim, s) })?;
+    let alpha_v = f32(ctx, alpha);
+    let alpha_c = ctx.astype(alpha_v, comp_dt)?;
+    let ag = mul(ctx, g, alpha_c)?;
+    let sig = ctx.unary(mlx::mlx_sigmoid, ag)?;
+    let swish = mul(ctx, g, sig)?;
+    let beta_v = f32(ctx, beta);
+    let beta_c = ctx.astype(beta_v, comp_dt)?;
+    let lb = add(ctx, l, beta_c)?;
+    mul(ctx, swish, lb)
+}
+
+/// Elementwise activation for the non-SwiGLU forms (matches ORT `ApplyActivation`).
+fn qmoe_activation(
+    ctx: &mut TranslationContext,
+    x: mlx::mlx_array,
+    act: &str,
+    comp_dt: mlx::mlx_dtype,
+) -> Result<mlx::mlx_array, MlxError> {
+    match act {
+        "relu" => {
+            let z_v = f32(ctx, 0.0);
+            let z = ctx.astype(z_v, comp_dt)?;
+            ctx.binary(mlx::mlx_maximum, x, z)
+        }
+        "silu" => {
+            let s = ctx.unary(mlx::mlx_sigmoid, x)?;
+            mul(ctx, x, s)
+        }
+        "gelu" => {
+            // 0.5 * x * (1 + tanh(0.7978845608 * (x + 0.044715 * x^3)))
+            let c0_v = f32(ctx, 0.044715);
+            let c0 = ctx.astype(c0_v, comp_dt)?;
+            let x2 = mul(ctx, x, x)?;
+            let x3 = mul(ctx, x2, x)?;
+            let cx3 = mul(ctx, x3, c0)?;
+            let inner = add(ctx, x, cx3)?;
+            let s_v = f32(ctx, 0.7978845608);
+            let s = ctx.astype(s_v, comp_dt)?;
+            let scaled = mul(ctx, inner, s)?;
+            let th = ctx.unary(mlx::mlx_tanh, scaled)?;
+            let one_v = f32(ctx, 1.0);
+            let one = ctx.astype(one_v, comp_dt)?;
+            let onep = add(ctx, th, one)?;
+            let half_v = f32(ctx, 0.5);
+            let half = ctx.astype(half_v, comp_dt)?;
+            let hx = mul(ctx, x, half)?;
+            mul(ctx, hx, onep)
+        }
+        "identity" => Ok(x),
+        other => Err(format!("QMoE: unsupported activation {other}")),
+    }
+}
+
+fn qmoe_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
+    let k_top = *n.ints.get("k").unwrap_or(&1) as i32;
+    let bits = *n.ints.get("expert_weight_bits").unwrap_or(&4);
+    let block_size = *n.ints.get("block_size").unwrap_or(&0);
+    let fusion = *n.ints.get("swiglu_fusion").unwrap_or(&0);
+    let act = n
+        .strings
+        .get("activation_type")
+        .cloned()
+        .unwrap_or_else(|| "relu".to_string());
+    let alpha = *n.floats.get("activation_alpha").unwrap_or(&1.0);
+    let beta = *n.floats.get("activation_beta").unwrap_or(&0.0);
+    let limit = n.floats.get("swiglu_limit").copied().unwrap_or(f32::INFINITY);
+
+    let x = ctx.resolve(&n.inputs[QMOE_IN_INPUT])?;
+    let out_dt = ctx.dtype_of(x);
+    let comp_dt = compute_float_dtype(out_dt);
+    let xs = ctx.shape_of(x);
+    if xs.is_empty() {
+        return Err("QMoE: input must have rank >= 1".to_string());
+    }
+    let hidden = *xs.last().unwrap() as i64;
+    let mut t: i64 = 1;
+    for &d in &xs[..xs.len() - 1] {
+        t *= d as i64;
+    }
+
+    // Expert dimensions from the (static) fc1 weight shape [E, F*I, H/pack].
+    let w1_arr = ctx.resolve(&n.inputs[QMOE_IN_FC1_W])?;
+    let w1s = ctx.shape_of(w1_arr);
+    if w1s.len() != 3 {
+        return Err("QMoE: fc1_experts_weights must be rank 3".to_string());
+    }
+    let e = w1s[0] as i64;
+    let fi = w1s[1] as i64;
+    let f = if fusion > 0 { 2 } else { 1 };
+    if fi % f != 0 {
+        return Err("QMoE: fc1 out features not divisible by fusion size".to_string());
+    }
+    let inter = fi / f;
+
+    // Routing gate [T, E]: softmax over the top-k logits (== masked softmax with non-top-k -> -inf).
+    // Threshold = the k-th largest logit per row (ascending sort, column E-k).
+    let router = ctx.resolve(&n.inputs[QMOE_IN_ROUTER])?;
+    let router_f = ctx.astype(router, mlx::mlx_dtype__MLX_FLOAT32)?;
+    let sorted = ctx.emit(|res, s| unsafe { mlx::mlx_sort_axis(res, router_f, 1, s) })?; // [T, E] asc
+    let kcol = (e as i32) - k_top;
+    let thr = ctx.slice(sorted, &[0, kcol], &[t as i32, kcol + 1])?; // [T, 1] k-th largest
+    let mask = ctx.binary(mlx::mlx_greater_equal, router_f, thr)?; // [T, E] bool
+    let neg_inf = f32(ctx, -3.0e38);
+    let masked = ctx.where_(mask, router_f, neg_inf)?;
+    let gate_f = ctx.softmax_axis(masked, 1)?; // [T, E] f32
+    let gate = ctx.astype(gate_f, comp_dt)?;
+
+    // Dequantize experts to dense [E, F*I, H] and [E, H, I].
+    let w1 = qmoe_dequant(
+        ctx, n, QMOE_IN_FC1_W, QMOE_IN_FC1_S, e, fi, hidden, bits, block_size, comp_dt,
+    )?;
+    let w2 = qmoe_dequant(
+        ctx, n, QMOE_IN_FC2_W, QMOE_IN_FC2_S, e, hidden, inter, bits, block_size, comp_dt,
+    )?;
+
+    // FC1: C1[e,t,:] = X[t,:] @ W1[e]^T  ->  [E, T, F*I].
+    let xc = ctx.astype(x, comp_dt)?;
+    let x2 = ctx.reshape(xc, &[t as i32, hidden as i32])?;
+    let x_e = ctx.expand_dims(x2, 0)?; // [1, T, H]
+    let bshape = [e as i32, t as i32, hidden as i32];
+    let x_b = ctx.emit(|res, s| unsafe {
+        mlx::mlx_broadcast_to(res, x_e, bshape.as_ptr(), bshape.len(), s)
+    })?;
+    let x_b = ctx.contiguous(x_b)?;
+    let w1t = ctx.transpose(w1, &[0, 2, 1])?; // [E, H, F*I]
+    let mut c1 = ctx.matmul(x_b, w1t)?; // [E, T, F*I]
+    if present(n, QMOE_IN_FC1_B) {
+        let b1 = ctx.resolve(&n.inputs[QMOE_IN_FC1_B])?;
+        let b1 = ctx.astype(b1, comp_dt)?;
+        let b1 = ctx.reshape(b1, &[e as i32, 1, fi as i32])?;
+        c1 = add(ctx, c1, b1)?;
+    }
+
+    // Activation -> A2 [E, T, I].
+    let a2 = if act == "swiglu" {
+        let c1r = ctx.reshape(c1, &[e as i32, t as i32, inter as i32, 2])?;
+        let gate_p = ctx.slice(c1r, &[0, 0, 0, 0], &[e as i32, t as i32, inter as i32, 1])?;
+        let lin_p = ctx.slice(c1r, &[0, 0, 0, 1], &[e as i32, t as i32, inter as i32, 2])?;
+        let gate_p = ctx.reshape(gate_p, &[e as i32, t as i32, inter as i32])?;
+        let lin_p = ctx.reshape(lin_p, &[e as i32, t as i32, inter as i32])?;
+        qmoe_swiglu(ctx, gate_p, lin_p, alpha, beta, limit, comp_dt)?
+    } else {
+        qmoe_activation(ctx, c1, &act, comp_dt)?
+    };
+
+    // FC2: C2[e,t,:] = A2[e,t,:] @ W2[e]^T  ->  [E, T, H].
+    let w2t = ctx.transpose(w2, &[0, 2, 1])?; // [E, I, H]
+    let mut c2 = ctx.matmul(a2, w2t)?; // [E, T, H]
+    if present(n, QMOE_IN_FC2_B) {
+        let b2 = ctx.resolve(&n.inputs[QMOE_IN_FC2_B])?;
+        let b2 = ctx.astype(b2, comp_dt)?;
+        let b2 = ctx.reshape(b2, &[e as i32, 1, hidden as i32])?;
+        c2 = add(ctx, c2, b2)?;
+    }
+
+    // Weighted sum over experts: out[t,:] = sum_e gate[t,e] * C2[e,t,:].
+    let gate_t = ctx.transpose(gate, &[1, 0])?; // [E, T]
+    let gate_e = ctx.reshape(gate_t, &[e as i32, t as i32, 1])?;
+    let weighted = mul(ctx, c2, gate_e)?; // [E, T, H]
+    let out_e = ctx.emit(|res, s| unsafe { mlx::mlx_sum_axis(res, weighted, 0, false, s) })?; // [T, H]
+    let out = ctx.astype(out_e, out_dt)?;
+    let out = ctx.reshape(out, &xs)?;
+    ctx.bind(&n.outputs[0], out);
+    Ok(())
+}
+
+fn qmoe_claim(node: &NodeView) -> ClaimResult {
+    let ninputs = node.num_inputs();
+    require!(
+        ninputs >= 7,
+        "QMoE expects at least 7 inputs (input, router, fc1_w, fc1_s, fc1_b, fc2_w, fc2_s), got {}",
+        ninputs
+    );
+    let out_dt = match node.output_info(0) {
+        Some(o) if is_mlx_float(o.dtype) => o.dtype,
+        Some(o) => deny!(
+            "output must have an MLX float dtype, got {}",
+            crate::registry::ort_dtype_name(o.dtype)
+        ),
+        None => deny!("output lacks tensor type/shape info"),
+    };
+    match node.input_info(QMOE_IN_INPUT) {
+        Some(i) => require!(
+            i.dtype == out_dt,
+            "input dtype must match output dtype {}",
+            crate::registry::ort_dtype_name(out_dt)
+        ),
+        None => deny!("input lacks tensor type/shape info"),
+    }
+    let qt = node.string_attr("quant_type", "int");
+    require!(qt == "int", "only quant_type='int' is supported (got {:?})", qt);
+    let bits = node.int_attr("expert_weight_bits", 4);
+    require!(bits == 4 || bits == 8, "expert_weight_bits must be 4 or 8 (got {bits})");
+    require!(
+        node.input_present(QMOE_IN_FC1_W) && node.input_present(QMOE_IN_FC2_W),
+        "requires fc1/fc2 expert weights"
+    );
+    require!(
+        node.input_present(QMOE_IN_FC1_S) && node.input_present(QMOE_IN_FC2_S),
+        "int quant requires fc1/fc2 scales"
+    );
+    require!(
+        !node.input_present(QMOE_IN_FC3_W),
+        "fc3 experts (non-fused gated MLP) not supported"
+    );
+    require!(
+        !node.input_present(QMOE_IN_FC1_ZP) && !node.input_present(QMOE_IN_FC2_ZP),
+        "asymmetric quantization (zero_points) not supported"
+    );
+    require!(
+        !node.input_present(QMOE_IN_ROUTER_W),
+        "router_weights (decoupled select/aggregate routing) not supported"
+    );
+    require!(
+        node.int_attr("use_sparse_mixer", 0) != 1,
+        "sparse mixer routing not supported"
+    );
+    let act = node.string_attr("activation_type", "relu");
+    require!(
+        matches!(act.as_str(), "swiglu" | "silu" | "gelu" | "relu" | "identity"),
+        "unsupported activation_type {:?}",
+        act
+    );
+    let fusion = node.int_attr("swiglu_fusion", 0);
+    if act == "swiglu" {
+        require!(fusion == 1, "SwiGLU requires swiglu_fusion=1 (interleaved), got {fusion}");
+    } else {
+        require!(fusion == 0, "swiglu_fusion is only valid with activation_type=swiglu");
+    }
+    let k_top = node.int_attr("k", 1);
+    require!(k_top >= 1, "k must be >= 1 (got {k_top})");
+    // fc1 weights must be a static rank-3 [E, F*I, H/pack] tensor, and k <= num_experts.
+    match node.input_info(QMOE_IN_FC1_W) {
+        Some(w) => {
+            require!(
+                w.shape.len() == 3 && w.shape.iter().all(|&d| d > 0),
+                "fc1_experts_weights must be a static rank-3 tensor, got shape {:?}",
+                w.shape
+            );
+            require!(
+                k_top <= w.shape[0],
+                "k={k_top} exceeds num_experts={}",
+                w.shape[0]
+            );
+        }
+        None => deny!("fc1_experts_weights lacks tensor type/shape info"),
+    }
+    Ok(())
+}
+
 // ---- registration -------------------------------------------------------------------------------
 
 fn reg(
@@ -1243,6 +1581,7 @@ fn reg(
 
 pub fn register(registry: &mut OpRegistry) {
     reg(registry, "com.microsoft", "MatMulNBits", matmulnbits_op, matmulnbits_claim);
+    reg(registry, "com.microsoft", "QMoE", qmoe_op, qmoe_claim);
     reg(
         registry,
         "com.microsoft",

@@ -275,7 +275,7 @@ If you require bit-exact parity with a CPU reference over a long generation, run
 ## Layout
 
 ```
-docs/     design docs (DESIGN, OP_ARCHITECTURE, MLX_EVALUATION)
+docs/     design docs (DESIGN, OP_ARCHITECTURE, COMPILED_CAPTURE, MLX_EVALUATION)
 rust/     the Rust EP: plugin-EP C-ABI vtables (factory/ep) + the modular ONNX->MLX
           translator (engine, registry, ops/*.rs) over a mlx-c RAII layer (mlx.rs)
 python/   pure-Python pip package (onnxruntime-ep-mlx): a locator that bundles + registers

@@ -140,6 +140,114 @@ fn gather_elements_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), 
     Ok(())
 }
 
+// ---- GatherND (ai.onnx, batch_dims=0) ----------------------------------------------------------
+// Gather full slices of `data` addressed by the last axis of `indices`:
+//   m = indices.shape[-1];  output.shape = indices.shape[:-1] ++ data.shape[m:].
+// Compile-safe — the output shape is static (from the operand shapes); only the index VALUES are
+// runtime, which `mlx_take` handles. We flatten the first m data axes to one row axis, fold each
+// index tuple to a flat row index (Σ idx[j]·stride[j], negatives wrapped by +data_shape[j]), and
+// gather the rows. batch_dims > 0 is declined.
+fn i64_row(ctx: &mut TranslationContext, data: &[i64]) -> mlx::mlx_array {
+    ctx.keep(Array::from_data(
+        data.as_ptr() as *const std::os::raw::c_void,
+        &[1, data.len() as i32],
+        mlx::mlx_dtype__MLX_INT64,
+    ))
+}
+
+fn gathernd_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
+    let data = ctx.resolve(&n.inputs[0])?;
+    let indices = ctx.resolve(&n.inputs[1])?;
+    let dshape = ctx.shape_of(data);
+    let ishape = ctx.shape_of(indices);
+    let (r, q) = (dshape.len(), ishape.len());
+    let m = *ishape.last().ok_or("GatherND: indices must have rank >= 1")? as usize;
+    if m == 0 || m > r {
+        return Err(format!("GatherND: indices last dim {m} out of range for data rank {r}"));
+    }
+    let rows: i32 = dshape[..m].iter().product();
+    let tail: i32 = dshape[m..].iter().product::<i32>().max(1);
+    let data_flat = ctx.reshape(data, &[rows, tail])?;
+    let p: i32 = ishape[..q - 1].iter().product::<i32>().max(1);
+    let idx2d = ctx.reshape(indices, &[p, m as i32])?;
+    let idx64 = ctx.astype(idx2d, mlx::mlx_dtype__MLX_INT64)?;
+
+    let dims: Vec<i64> = dshape[..m].iter().map(|&d| d as i64).collect();
+    let mut strides = vec![0i64; m];
+    let mut acc = 1i64;
+    for j in (0..m).rev() {
+        strides[j] = acc;
+        acc *= dims[j];
+    }
+    let dims_a = i64_row(ctx, &dims); // [1,m]
+    let strides_a = i64_row(ctx, &strides); // [1,m]
+
+    // Wrap negative indices per column: idx = idx < 0 ? idx + dim : idx.
+    let zero = ctx.scalar_i64(0);
+    let neg = ctx.binary(mlx::mlx_less, idx64, zero)?;
+    let wrapped = ctx.binary(mlx::mlx_add, idx64, dims_a)?;
+    let idxpos = ctx.where_(neg, wrapped, idx64)?;
+    // flat row index per tuple, then gather.
+    let scaled = ctx.binary(mlx::mlx_multiply, idxpos, strides_a)?; // [P,m]
+    let flat = ctx.emit(|res, s| unsafe { mlx::mlx_sum_axis(res, scaled, 1, false, s) })?; // [P]
+    let flat = ctx.astype(flat, mlx::mlx_dtype__MLX_INT32)?;
+    let gathered = ctx.emit(|res, s| unsafe { mlx::mlx_take_axis(res, data_flat, flat, 0, s) })?; // [P,tail]
+
+    let mut oshape: Vec<i32> = ishape[..q - 1].to_vec();
+    oshape.extend_from_slice(&dshape[m..]);
+    let out = ctx.reshape(gathered, &oshape)?;
+    let out = ctx.contiguous(out)?;
+    ctx.bind(&n.outputs[0], out);
+    Ok(())
+}
+
+fn gathernd_claim(node: &NodeView) -> ClaimResult {
+    require!(
+        node.num_inputs() == 2 && node.num_outputs() == 1,
+        "GatherND expects 2 inputs and 1 output, got {}in/{}out",
+        node.num_inputs(),
+        node.num_outputs()
+    );
+    require!(
+        node.int_attr("batch_dims", 0) == 0,
+        "GatherND: only batch_dims=0 is supported"
+    );
+    let (data, out) = match movable_io(node) {
+        Some(v) => v,
+        None => deny!("missing tensor type/shape info on the data input or output"),
+    };
+    require!(
+        is_movable(data),
+        "data dtype {} is not a movable dtype supported on GPU",
+        crate::registry::ort_dtype_name(data)
+    );
+    require!(out == data, "output dtype must match data dtype");
+    let idt = match node.input_info(1) {
+        Some(i) => i.dtype,
+        None => deny!("missing indices tensor type/shape info"),
+    };
+    require!(
+        idt == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+            || idt == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32,
+        "GatherND indices must be int32/int64, got {}",
+        crate::registry::ort_dtype_name(idt)
+    );
+    // The last axis of indices (the index-tuple width) must be a known static extent.
+    match node.input_info(1) {
+        Some(i) => require!(
+            !i.shape.is_empty() && *i.shape.last().unwrap() > 0,
+            "GatherND: indices last dimension (tuple width) must be a known static extent, got {:?}",
+            i.shape
+        ),
+        None => deny!("missing indices shape info"),
+    }
+    match node.input_info(0) {
+        Some(i) => require!(!i.shape.is_empty(), "GatherND: data must have rank >= 1"),
+        None => deny!("missing data shape info"),
+    }
+    Ok(())
+}
+
 fn scatter_elements_op(ctx: &mut TranslationContext, n: &NodeDesc) -> Result<(), MlxError> {
     let data = ctx.resolve(&n.inputs[0])?;
     let indices = ctx.resolve(&n.inputs[1])?;
@@ -475,13 +583,13 @@ fn read_range_scalar(ctx: &TranslationContext, n: &NodeDesc, i: usize) -> Result
     }
     match h.dtype {
         t if t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16 => {
-            Ok(unsafe { *(h.data as *const i16) } as f64)
+                Ok(unsafe { *(h.data as *const i16) } as f64)
         }
         t if t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32 => {
-            Ok(unsafe { *(h.data as *const i32) } as f64)
+                Ok(unsafe { *(h.data as *const i32) } as f64)
         }
         t if t == ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 => {
-            Ok(unsafe { *(h.data as *const i64) } as f64)
+                Ok(unsafe { *(h.data as *const i64) } as f64)
         }
         _ => Err("Range initializer dtype is not supported".to_string()),
     }
@@ -1199,6 +1307,10 @@ fn range_claim(node: &NodeView) -> ClaimResult {
         ),
         None => deny!("missing output tensor type/shape info"),
     };
+    // Range's output extent is value-dependent, so the bounds MUST be constant scalar initializers:
+    // claiming a runtime-bounded Range puts it in the compiled closure where its output feeds a
+    // downstream shape/axes reader (e.g. ReduceMean axes in expanded RMSNormalization), forcing a
+    // mid-compile-trace eval that aborts `mlx_compile`. Runtime bounds stay on CPU (vision-only value).
     let (start, limit, delta) = match (
         node.read_const_scalar_f64(0),
         node.read_const_scalar_f64(1),
@@ -1544,6 +1656,7 @@ fn reg(
 
 pub fn register(registry: &mut OpRegistry) {
     reg(registry, "Gather", gather_op, gather_like_claim);
+    reg(registry, "GatherND", gathernd_op, gathernd_claim);
     reg(registry, "GatherElements", gather_elements_op, gather_like_claim);
     reg(registry, "ScatterElements", scatter_elements_op, scatter_elements_claim);
     reg(registry, "Concat", concat_op, concat_claim);

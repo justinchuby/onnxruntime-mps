@@ -46,6 +46,11 @@ pub struct TensorRef {
     pub ctx_index: usize,
     /// True when a CtxInput is a hoisted constant initializer (wrapped/cached once).
     pub constant: bool,
+    /// True when this tensor's VALUE derives purely from input SHAPES + constants (a `Shape`/`Size`
+    /// output, or a deterministic chain over such) — independent of runtime DATA. Such a value is a
+    /// genuine constant inside a shape-keyed `mlx_compile` trace (no tracer dependency), so it can be
+    /// eval'd mid-trace to feed a static reshape/expand/slice/range target.
+    pub shape_const: bool,
     pub init: Option<InitData>,
 }
 
@@ -56,6 +61,7 @@ impl TensorRef {
             source: Src::Absent,
             ctx_index: 0,
             constant: false,
+            shape_const: false,
             init: None,
         }
     }
@@ -1107,6 +1113,45 @@ impl<'a> TranslationContext<'a> {
     /// Raw host byte pointer of an (evaluated) array — valid until the array is freed.
     pub fn host_ptr(&self, a: mlxsys::mlx_array) -> *const u8 {
         unsafe { mlxsys::mlx_array_data_uint8(a) as *const u8 }
+    }
+
+    /// Like [`Self::contiguous_eval`] but permitted inside a general trace. ONLY call when the array
+    /// is provably shape-const (a `Shape`/`Size`-derived value or a chain over constants): it has no
+    /// tracer dependency, so eval computes a genuine constant rather than aborting on a tracer.
+    fn contiguous_eval_const(&mut self, a: mlxsys::mlx_array) -> Result<mlxsys::mlx_array, MlxError> {
+        let r = self.contiguous(a)?;
+        let mut v = VectorArray::new();
+        v.append(r);
+        mlx::eval(&v)?;
+        Ok(r)
+    }
+
+    /// Read an int64 vector honoring the ref's SOURCE. Constant initializers / subgraph boundary
+    /// inputs are read from host bytes (cheap). A dynamic intermediate is materialized by a mid-graph
+    /// eval — permitted inside a general trace ONLY when the ref is `shape_const` (no tracer
+    /// dependency); a data-dependent runtime value in a general trace fails so the plan falls back to
+    /// eager (where real data exists).
+    pub fn read_ints_eval(&mut self, r: &TensorRef) -> Result<Vec<i64>, MlxError> {
+        if !matches!(r.source, Src::Intermediate) {
+            return self.read_ints(r);
+        }
+        if self.in_general_trace && !r.shape_const {
+            return Err(
+                "MLX: data-dependent runtime shape cannot be read in a general trace".to_string(),
+            );
+        }
+        let a = self.resolve(r)?;
+        let a = self.astype(a, mlxsys::mlx_dtype__MLX_INT64)?;
+        let a = self.contiguous_eval_const(a)?;
+        let n = self.size_of(a);
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let p = unsafe { mlxsys::mlx_array_data_int64(a) };
+        if p.is_null() {
+            return Ok(Vec::new());
+        }
+        Ok(unsafe { std::slice::from_raw_parts(p, n) }.to_vec())
     }
 
     /// Evaluate a 0-d/1-element integer array and read its scalar value host-side (int32 or int64).

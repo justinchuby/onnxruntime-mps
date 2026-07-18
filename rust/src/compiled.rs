@@ -76,6 +76,24 @@ fn is_general_compile_unsafe(op_type: &str) -> bool {
 /// subgraph containing an op that is unsafe to trace once (see [`is_general_compile_unsafe`]). An
 /// extra kill-switch `MLX_EP_NO_GENERAL_COMPILE` forces eager for A/B numerical validation without
 /// touching the decode path.
+/// A node that would read a DATA-DEPENDENT runtime shape/scalar (a reshape/expand/slice/range target
+/// that is neither constant nor shape-const). Reading it needs a mid-graph eval that is illegal in a
+/// shapeless `mlx_compile` trace, so such a subgraph must run eager. Shape-const runtime targets
+/// (derived from `Shape`/`Size`) are compile-safe and do NOT trip this.
+fn reads_data_dependent_shape(n: &NodeDesc) -> bool {
+    let idx: &[usize] = match n.op_type.as_str() {
+        "Reshape" | "Expand" => &[1],
+        "Slice" => &[1, 2, 3, 4],
+        "Range" => &[0, 1, 2],
+        _ => return false,
+    };
+    idx.iter().any(|&i| {
+        n.inputs
+            .get(i)
+            .is_some_and(|tr| matches!(tr.source, Src::Intermediate) && !tr.shape_const)
+    })
+}
+
 pub fn general_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
     if !compile_enabled(has_control_flow) {
         return false;
@@ -86,7 +104,9 @@ pub fn general_enabled(has_control_flow: bool, nodes: &[NodeDesc]) -> bool {
     {
         return false;
     }
-    !nodes.iter().any(|n| is_general_compile_unsafe(&n.op_type))
+    !nodes
+        .iter()
+        .any(|n| is_general_compile_unsafe(&n.op_type) || reads_data_dependent_shape(n))
 }
 
 /// Decide whether the compiled-PREFILL fast path (Phase 2) is allowed for this plan. Prefill is the

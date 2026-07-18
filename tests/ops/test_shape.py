@@ -422,3 +422,42 @@ def test_constant_of_shape_default_zero():
         inits=(initz("s", shape),),
     )
     _assert_matches_cpu_noopt(model, {}, rtol=0.0, atol=0.0)
+
+
+def test_reshape_dynamic_shape_from_input_shape(capfd, monkeypatch):
+    """Runtime Reshape whose target is derived from Shape(input) (Shape->Gather->Concat with const
+    tail) — a SHAPE-CONST value. The EP must claim it (via the shape-const mid-trace eval), keep the
+    fused partition acyclic, and match ORT CPU. Guards the decode de-fragmentation path."""
+    import numpy as np
+    import onnx_ir as ir
+    import _models as m
+    DT = ir.DataType
+    B, S, H = 1, 5, 12
+    x = ir.Value(name="x", type=ir.TensorType(DT.FLOAT), shape=ir.Shape([B, "S", H]))
+    shp = ir.Value(name="shp")
+    dims01 = ir.Value(name="dims01")
+    tail = m.tensor("tail", DT.INT64, [2])  # const [3,4]
+    idx = m.tensor("idx", DT.INT64, [2])    # const [0,1]
+    target = ir.Value(name="target")
+    o = ir.Value(name="o", type=ir.TensorType(DT.FLOAT), shape=ir.Shape([B, "S", 3, 4]))
+    nodes = [
+        ir.Node("", "Shape", [x], outputs=[shp]),
+        ir.Node("", "Gather", [shp, idx], attributes=[ir.AttrInt64("axis", 0)], outputs=[dims01]),
+        ir.Node("", "Concat", [dims01, tail], attributes=[ir.AttrInt64("axis", 0)], outputs=[target]),
+        ir.Node("", "Reshape", [x, target], outputs=[o]),
+    ]
+    inits = [
+        ir.Value(name="idx", type=ir.TensorType(DT.INT64), shape=ir.Shape([2]),
+                 const_value=ir.tensor(np.array([0, 1], np.int64))),
+        ir.Value(name="tail", type=ir.TensorType(DT.INT64), shape=ir.Shape([2]),
+                 const_value=ir.tensor(np.array([3, 4], np.int64))),
+    ]
+    g = ir.Graph([x], [o], nodes=nodes, initializers=inits, opset_imports={"": 24}, name="mlx_dynreshape")
+    model = ir.to_proto(ir.Model(g, ir_version=11)).SerializeToString()
+    feed = {"x": np.random.default_rng(0).standard_normal((B, S, H)).astype(np.float32)}
+    monkeypatch.setenv("MLX_EP_CLAIM_DEBUG", "1")
+    m.assert_matches_cpu(model, feed, rtol=1e-5, atol=1e-5)
+    err = capfd.readouterr().err
+    for line in err.splitlines():
+        if "unclaimed" in line:
+            assert "unclaimed Reshape " not in line, f"shape-const Reshape declined: {line}"

@@ -38,13 +38,13 @@ fn int_attr(n: &NodeDesc, name: &str, default: i64) -> i64 {
 }
 
 /// Read a constant int64 parameter input (shape/axes/starts/...) at translate time.
-fn read_ints(ctx: &TranslationContext, n: &NodeDesc, i: usize) -> Result<Vec<i64>, MlxError> {
-    ctx.read_ints(&n.inputs[i])
+fn read_ints(ctx: &mut TranslationContext, n: &NodeDesc, i: usize) -> Result<Vec<i64>, MlxError> {
+    ctx.read_ints_eval(&n.inputs[i])
 }
 
 /// Read an axes/split-style list from either the opset-13 input or the opset<13 INTS attribute.
 fn read_list_input_or_attr(
-    ctx: &TranslationContext,
+    ctx: &mut TranslationContext,
     n: &NodeDesc,
     input_idx: usize,
     attr: &str,
@@ -847,8 +847,9 @@ fn reshape_claim(node: &NodeView) -> ClaimResult {
         crate::registry::ort_dtype_name(data)
     );
     require!(
-        node.is_const_int64(1),
-        "Reshape: only a constant int64 `shape` initializer is claimed; this node's is a runtime value — stays on CPU"
+        node.input_info(1).map(|i| i.dtype)
+            == Some(ort::ONNXTensorElementDataType_ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64),
+        "Reshape `shape` input must be int64 (runtime shape-derived values resolve at trace time; a data-dependent shape falls back to eager, and a cyclic partition is dropped to CPU)"
     );
     require!(
         node.int_attr("allowzero", 0) == 0,

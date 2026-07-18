@@ -439,6 +439,65 @@ fn build_convex_clusters(
             c
         })
         .collect();
+
+    // ---- quotient-acyclicity guard --------------------------------------------------------------
+    // Per-cluster convexity is necessary but NOT sufficient: two individually-convex clusters can
+    // still cycle THROUGH the CPU nodes between them (a1->b1 in one direction, b2->a2 in the other),
+    // and ORT rejects a cyclic contraction ("the graph is not acyclic"). Contract the clusters into a
+    // quotient graph and, while it has a cycle, drop the smallest offending cluster (its nodes fall
+    // back to CPU) until acyclic. Terminates (each pass removes one cluster) and is a no-op whenever
+    // the partition is already acyclic (the common case).
+    loop {
+        let mut qid = vec![usize::MAX; n];
+        for (ci, cl) in clusters.iter().enumerate() {
+            for &node in cl {
+                qid[node] = ci;
+            }
+        }
+        let mut next = clusters.len();
+        for q in qid.iter_mut() {
+            if *q == usize::MAX {
+                *q = next;
+                next += 1;
+            }
+        }
+        let mut qsucc: Vec<HashSet<usize>> = vec![HashSet::new(); next];
+        let mut qindeg = vec![0usize; next];
+        for u in 0..n {
+            for &v in &succ[u] {
+                let (a, b) = (qid[u], qid[v]);
+                if a != b && qsucc[a].insert(b) {
+                    qindeg[b] += 1;
+                }
+            }
+        }
+        let mut stack: Vec<usize> = (0..next).filter(|&i| qindeg[i] == 0).collect();
+        let mut visited = 0usize;
+        while let Some(u) = stack.pop() {
+            visited += 1;
+            for &v in &qsucc[u] {
+                qindeg[v] -= 1;
+                if qindeg[v] == 0 {
+                    stack.push(v);
+                }
+            }
+        }
+        if visited == next {
+            break; // quotient is acyclic
+        }
+        // A cycle remains: nodes with residual in-degree are on/after it. Drop the smallest CLUSTER
+        // among them (super-node id < clusters.len()); its members return to CPU next pass.
+        let victim = (0..next)
+            .filter(|&i| qindeg[i] > 0 && i < clusters.len())
+            .min_by_key(|&ci| clusters[ci].len());
+        match victim {
+            Some(ci) => {
+                clusters.remove(ci);
+            }
+            None => break, // unreachable: singletons alone cannot cycle in an acyclic base graph
+        }
+    }
+
     clusters.sort_by_key(|c| c[0]);
     clusters
 }
@@ -592,6 +651,7 @@ unsafe fn build_plan(
                         source: Src::Intermediate,
                         ctx_index: 0,
                         constant: false,
+                        shape_const: false,
                         init: None,
                     }
                 } else if let Some(&ci) = ctx_input_index.get(&name) {
@@ -603,6 +663,7 @@ unsafe fn build_plan(
                         source: Src::CtxInput,
                         ctx_index: ci,
                         constant,
+                        shape_const: false,
                         init: None,
                     }
                 } else if let Some(init) = initializers.get(&name) {
@@ -611,6 +672,7 @@ unsafe fn build_plan(
                         source: Src::Initializer,
                         ctx_index: 0,
                         constant: false,
+                        shape_const: false,
                         init: Some(init.clone()),
                     }
                 } else {
@@ -647,6 +709,46 @@ unsafe fn build_plan(
             }
 
             nodes.push(nd);
+        }
+
+        // ---- shape-const taint ------------------------------------------------------------------
+        // A tensor is "shape-const" if its VALUE is a pure function of input SHAPES + constants (no
+        // runtime DATA): a `Shape`/`Size` output (const even when its input is a tracer — it reads
+        // only the fixed-per-shape-key shape), an initializer, or any deterministic op whose inputs
+        // are all shape-const. Such a value is a real constant inside the mlx_compile trace (no tracer
+        // dependency), so a reshape/expand/slice/range target built from it can be eval'd mid-trace
+        // and used as a static shape. `nodes` are topologically ordered (producers precede consumers).
+        {
+            let mut sc: std::collections::HashSet<String> = initializers.keys().cloned().collect();
+            let is_random = |op: &str| {
+                matches!(
+                    op,
+                    "RandomNormal" | "RandomUniform" | "RandomNormalLike" | "RandomUniformLike"
+                        | "Bernoulli" | "Multinomial" | "Dropout"
+                )
+            };
+            for nd in nodes.iter_mut() {
+                for tr in nd.inputs.iter_mut() {
+                    if !tr.name.is_empty() && sc.contains(&tr.name) {
+                        tr.shape_const = true;
+                    }
+                }
+                let input_const = |tr: &TensorRef| {
+                    matches!(tr.source, Src::Absent | Src::Initializer)
+                        || tr.constant
+                        || tr.shape_const
+                };
+                let out_const = nd.subgraphs.is_empty()
+                    && (matches!(nd.op_type.as_str(), "Shape" | "Size")
+                        || (!is_random(&nd.op_type) && nd.inputs.iter().all(input_const)));
+                if out_const {
+                    for o in &nd.outputs {
+                        if !o.name.is_empty() {
+                            sc.insert(o.name.clone());
+                        }
+                    }
+                }
+            }
         }
 
         // Compiled-decode fast path (mlx_compile) is allowed unless a control-flow node is present
@@ -970,6 +1072,7 @@ unsafe fn build_subgraphs(
                             source: Src::Intermediate,
                             ctx_index: 0,
                             constant: false,
+                            shape_const: false,
                             init: None,
                         }
                     } else if let Some(init) = inits.get(&name) {
@@ -978,6 +1081,7 @@ unsafe fn build_subgraphs(
                             source: Src::Initializer,
                             ctx_index: 0,
                             constant: false,
+                            shape_const: false,
                             init: Some(init.clone()),
                         }
                     } else if let Some(&ci) = ctx_input_index.get(&name) {
@@ -986,6 +1090,7 @@ unsafe fn build_subgraphs(
                             source: Src::CtxInput,
                             ctx_index: ci,
                             constant: false,
+                            shape_const: false,
                             init: None,
                         }
                     } else if enclosing_names.contains(&name) {
@@ -994,6 +1099,7 @@ unsafe fn build_subgraphs(
                             source: Src::Intermediate,
                             ctx_index: 0,
                             constant: false,
+                            shape_const: false,
                             init: None,
                         }
                     } else {

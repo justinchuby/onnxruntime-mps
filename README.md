@@ -77,6 +77,21 @@ cast).
 - **`mlx-c` (and `mlx`) — a HARD build dependency**: `brew install mlx-c`
 - A **Rust toolchain** (`rustup`) to build the EP from source
 
+## Versioning (ORT compatibility)
+
+A plugin EP is bound to a single ORT plugin-EP C-ABI version, so **the version number encodes which
+ONNX Runtime it targets**: `0.<ORT_API_VERSION>.<patch>`. The minor is the supported
+`ORT_API_VERSION`, so a build always states exactly one ORT it works with:
+
+| onnxruntime-ep-mlx | ONNX Runtime | `ORT_API_VERSION` |
+|---|---|---|
+| `0.27.x` | 1.27.x | 27 |
+
+When ORT ships a new API version (1.28 → `ORT_API_VERSION 28`), the EP moves to `0.28.0`. The leading
+`0.` marks the EP's own surface as pre-1.0; `<patch>` carries feature/fix releases within one ORT
+version. The EP reports this same string to ORT via `GetVersion` (single-sourced from
+`[package].version`).
+
 ## Build
 
 The EP is a Rust `cdylib` crate under [`rust/`](rust/). Point it at an ONNX Runtime C-API

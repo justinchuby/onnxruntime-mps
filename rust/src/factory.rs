@@ -56,7 +56,11 @@ impl MlxEpFactory {
             ep_api,
             name,
             vendor: c"onnxruntime-mlx".to_owned(),
-            version: c"0.1.0".to_owned(),
+            // Single-sourced from [package].version so the EP reports its real version to ORT
+            // (GetVersion). Our version scheme encodes ORT compat: 0.<ORT_API_VERSION>.<patch>,
+            // so 0.27.x pairs with ORT 1.27.x (ORT_API_VERSION 27).
+            version: CString::new(env!("CARGO_PKG_VERSION"))
+                .expect("CARGO_PKG_VERSION contains an interior nul"),
         })
     }
 

@@ -1293,6 +1293,8 @@ fn qmoe_dequant(
 
 /// SwiGLU on interleaved gate/linear halves (matches ORT `ApplySwiGLUActivation`):
 /// g = min(gate, limit); l = clamp(linear, -limit, limit); out = g*sigmoid(alpha*g) * (l + beta).
+/// The clamp (limit=+inf), the alpha scale (alpha=1) and the beta shift (beta=0) are identities in
+/// the standard SwiGLU form, so we skip those dispatches — fewer eager kernels, same result.
 fn qmoe_swiglu(
     ctx: &mut TranslationContext,
     gate: mlx::mlx_array,
@@ -1302,20 +1304,33 @@ fn qmoe_swiglu(
     limit: f32,
     comp_dt: mlx::mlx_dtype,
 ) -> Result<mlx::mlx_array, MlxError> {
-    let lim_v = f32(ctx, limit);
-    let lim = ctx.astype(lim_v, comp_dt)?;
-    let neglim_v = f32(ctx, -limit);
-    let neglim = ctx.astype(neglim_v, comp_dt)?;
-    let g = ctx.binary(mlx::mlx_minimum, gate, lim)?;
-    let l = ctx.emit(|res, s| unsafe { mlx::mlx_clip(res, linear, neglim, lim, s) })?;
-    let alpha_v = f32(ctx, alpha);
-    let alpha_c = ctx.astype(alpha_v, comp_dt)?;
-    let ag = mul(ctx, g, alpha_c)?;
+    let (g, l) = if limit.is_finite() {
+        let lim_v = f32(ctx, limit);
+        let lim = ctx.astype(lim_v, comp_dt)?;
+        let neglim_v = f32(ctx, -limit);
+        let neglim = ctx.astype(neglim_v, comp_dt)?;
+        let g = ctx.binary(mlx::mlx_minimum, gate, lim)?;
+        let l = ctx.emit(|res, s| unsafe { mlx::mlx_clip(res, linear, neglim, lim, s) })?;
+        (g, l)
+    } else {
+        (gate, linear)
+    };
+    let ag = if alpha != 1.0 {
+        let alpha_v = f32(ctx, alpha);
+        let alpha_c = ctx.astype(alpha_v, comp_dt)?;
+        mul(ctx, g, alpha_c)?
+    } else {
+        g
+    };
     let sig = ctx.unary(mlx::mlx_sigmoid, ag)?;
     let swish = mul(ctx, g, sig)?;
-    let beta_v = f32(ctx, beta);
-    let beta_c = ctx.astype(beta_v, comp_dt)?;
-    let lb = add(ctx, l, beta_c)?;
+    let lb = if beta != 0.0 {
+        let beta_v = f32(ctx, beta);
+        let beta_c = ctx.astype(beta_v, comp_dt)?;
+        add(ctx, l, beta_c)?
+    } else {
+        l
+    };
     mul(ctx, swish, lb)
 }
 

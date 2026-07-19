@@ -182,6 +182,62 @@ def test_group_norm(dt):
     m.assert_matches_cpu(model, {"x": x, "s": scale, "b": bias}, **tol(dt))
 
 
+def test_group_norm_dynamic_spatial():
+    """GroupNormalization with dynamic batch/spatial dims (the standard diffusion-UNet export
+    form, e.g. [B, C, H, W] with B/H/W symbolic). Only the channel count needs to be static to
+    split into groups; the reshape is built from the concrete trace-time shape (like Conv). Must
+    be CLAIMED by MLX (not forced to CPU, which fragmented every UNet resnet/attention block) and
+    match CPU numerically."""
+    import contextlib
+    import os
+    import tempfile
+
+    @contextlib.contextmanager
+    def _capture_stderr():
+        with tempfile.TemporaryFile(mode="w+b") as tmp:
+            old = os.dup(2)
+            os.dup2(tmp.fileno(), 2)
+            try:
+                yield tmp
+            finally:
+                os.dup2(old, 2)
+                os.close(old)
+
+    rng = np.random.default_rng(15)
+    x = rng.standard_normal((2, 6, 5, 7)).astype(np.float32)
+    scale = rng.standard_normal((6,)).astype(np.float32)
+    bias = rng.standard_normal((6,)).astype(np.float32)
+    model = build(
+        "GroupNormalization",
+        [
+            m.tensor("x", DT.FLOAT, ["B", 6, "H", "W"]),
+            m.tensor("s", DT.FLOAT, [6]),
+            m.tensor("b", DT.FLOAT, [6]),
+        ],
+        [m.tensor("o", DT.FLOAT, ["B", 6, "H", "W"])],
+        attrs=[ir.AttrInt64("num_groups", 3), ir.AttrFloat32("epsilon", 1e-5)],
+    )
+    feeds = {"x": x, "s": scale, "b": bias}
+
+    prev = os.environ.get("ONNXRUNTIME_EP_MLX_CLAIM_DEBUG")
+    os.environ["ONNXRUNTIME_EP_MLX_CLAIM_DEBUG"] = "1"
+    try:
+        with _capture_stderr() as cap:
+            m.run_mlx(model, feeds)
+            cap.seek(0)
+            claim_log = cap.read().decode("utf-8", "replace")
+    finally:
+        if prev is None:
+            os.environ.pop("ONNXRUNTIME_EP_MLX_CLAIM_DEBUG", None)
+        else:
+            os.environ["ONNXRUNTIME_EP_MLX_CLAIM_DEBUG"] = prev
+
+    assert "unclaimed GroupNormalization" not in claim_log, (
+        f"dynamic-spatial GroupNormalization must be claimed by MLX, got:\n{claim_log}"
+    )
+    m.assert_matches_cpu(model, feeds, rtol=1e-4, atol=1e-5)
+
+
 # --- LpNormalization --------------------------------------------------------------------------
 @pytest.mark.parametrize("p", [1, 2])
 @pytest.mark.parametrize("axis", [-1, 0])

@@ -665,11 +665,12 @@ fn group_norm_claim(node: &NodeView) -> ClaimResult {
         c > 0,
         "channel dimension must be static and positive (got {c})"
     );
-    require!(
-        x.shape.iter().all(|&d| d > 0),
-        "all input dimensions must be static and positive to build the group reshape (got {:?})",
-        x.shape
-    );
+    // Batch and spatial dims may be dynamic (-1): the group reshape only needs a
+    // static channel count, and the translator builds the reshape from the
+    // concrete trace-time shape (same as Conv, which is claimed on dynamic-spatial
+    // UNets). Real diffusion UNets export with dynamic N/H/W, so requiring all
+    // dims static here needlessly forced every GroupNorm onto CPU and fragmented
+    // the graph. Only the channel dim must be known to split into groups.
     let groups = node.int_attr("num_groups", 0);
     require!(
         groups > 0 && c % groups == 0,
